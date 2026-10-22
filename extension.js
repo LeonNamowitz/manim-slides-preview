@@ -60,6 +60,97 @@ try:
 except Exception:
     _manim_render = None
 
+# A cache hit skips video encoding, but Cairo normally still rasterizes one
+# complete static frame and one final frame. Neither frame is needed for the
+# cached partial movie. Leave scene/animation interpolation completely intact:
+# those updates establish the starting state of subsequent self.play() calls.
+# The patch applies only to the warm in-process renderer, and can be disabled
+# independently of Manim's actual partial-movie cache.
+_CACHE_FAST = {"enabled": True, "profile": False, "hash_ms": 0.0,
+               "state_ms": 0.0, "skipped_frames": 0, "skipped_static": 0}
+try:
+    import manim.renderer.cairo_renderer as _cairo
+    from manim.renderer.cairo_renderer import CairoRenderer as _Cairo
+    from manim.scene.scene import Scene as _Scene
+    from time import perf_counter as _clock
+
+    _original_render_frame = _Cairo.render
+    _original_static_frame = _Cairo.save_static_frame_data
+    _original_freeze_frame = _Cairo.freeze_current_frame
+    _original_cairo_play = _Cairo.play
+    _original_hash_play = _cairo.get_hash_from_play_call
+    _original_play_internal = _Scene.play_internal
+
+    def _cache_render_frame(self, *args, **kwargs):
+        if _CACHE_FAST["enabled"] and self.skip_animations:
+            _CACHE_FAST["skipped_frames"] += 1
+            return None
+        return _original_render_frame(self, *args, **kwargs)
+
+    def _cache_static_frame(self, scene, static_mobjects):
+        if _CACHE_FAST["enabled"] and self.skip_animations:
+            self.static_image = None  # same reset as the unpatched method
+            _CACHE_FAST["skipped_static"] += 1
+            return None
+        return _original_static_frame(self, scene, static_mobjects)
+
+    def _cache_freeze_frame(self, duration):
+        if _CACHE_FAST["enabled"] and self.skip_animations:
+            # The cached Wait already has its encoded frame; no copy needed.
+            _CACHE_FAST["skipped_frames"] += 1
+            return None
+        return _original_freeze_frame(self, duration)
+
+    def _measure_hash(*args, **kwargs):
+        if not _CACHE_FAST["profile"]:
+            return _original_hash_play(*args, **kwargs)
+        t = _clock()
+        try:
+            return _original_hash_play(*args, **kwargs)
+        finally:
+            _CACHE_FAST["hash_ms"] += (_clock() - t) * 1000
+
+    def _measure_state(self, *args, **kwargs):
+        if not _CACHE_FAST["profile"]:
+            return _original_play_internal(self, *args, **kwargs)
+        t = _clock()
+        try:
+            return _original_play_internal(self, *args, **kwargs)
+        finally:
+            _CACHE_FAST["state_ms"] += (_clock() - t) * 1000
+
+    def _measure_play(self, *args, **kwargs):
+        if not _CACHE_FAST["profile"]:
+            return _original_cairo_play(self, *args, **kwargs)
+        idx = self.num_plays
+        _CACHE_FAST["hash_ms"] = 0.0
+        _CACHE_FAST["state_ms"] = 0.0
+        _CACHE_FAST["skipped_frames"] = 0
+        _CACHE_FAST["skipped_static"] = 0
+        t = _clock()
+        try:
+            return _original_cairo_play(self, *args, **kwargs)
+        finally:
+            total = (_clock() - t) * 1000
+            hash_ms = _CACHE_FAST["hash_ms"]
+            state_ms = _CACHE_FAST["state_ms"]
+            other_ms = max(0.0, total - hash_ms - state_ms)
+            print("[msp-perf] anim={} skipped={} total={:.1f}ms hash={:.1f}ms "
+                  "state={:.1f}ms other={:.1f}ms bypassed_frames={} bypassed_static={}".format(
+                      idx, bool(self.skip_animations), total, hash_ms, state_ms,
+                      other_ms, _CACHE_FAST["skipped_frames"],
+                      _CACHE_FAST["skipped_static"]), flush=True)
+
+    _Cairo.render = _cache_render_frame
+    _Cairo.save_static_frame_data = _cache_static_frame
+    _Cairo.freeze_current_frame = _cache_freeze_frame
+    _Cairo.play = _measure_play
+    _cairo.get_hash_from_play_call = _measure_hash
+    _Scene.play_internal = _measure_state
+except Exception as e:
+    print("[msp-perf] Cairo optimization unavailable: " + str(e)[:240], flush=True)
+
+
 # Low-level encoder tuning: Manim 0.21 encodes partial videos through PyAV's
 # libx264 with no preset (defaults to 'medium'). We wrap add_stream so a faster
 # preset can be injected per-request. Class-level patch is safe: verified that
@@ -177,6 +268,8 @@ while True:
     if BaseSlide is not None:
         BaseSlide.skip_reversing = bool(req.get("skip_reversing", False))
     _PRESET["value"] = req.get("x264_preset") or None
+    _CACHE_FAST["enabled"] = bool(req.get("cache_fast_path", True))
+    _CACHE_FAST["profile"] = bool(req.get("profile_cache_hits", False))
     t = time.time()
     if faulthandler:
         try: faulthandler.dump_traceback_later(300, repeat=True, exit=False)
@@ -325,6 +418,7 @@ function sourceKey(filePath, scenes, conf) {
     h.update(JSON.stringify([
       scenes, conf.get("quality"), !!conf.get("turboPreview"),
       conf.get("x264Preset") || "", conf.get("extraRenderArgs") || [],
+      conf.get("cacheFastPath") !== false,
     ]));
     return h.digest("hex");
   } catch (_) { return null; }
@@ -1360,6 +1454,8 @@ async function pipeline(filePath, opts = {}) {
       rc = await exec(renderArgs, "render", {
         skip_reversing: turbo,
         x264_preset: turbo ? "ultrafast" : (conf.get("x264Preset") || null),
+        cache_fast_path: conf.get("cacheFastPath") !== false,
+        profile_cache_hits: conf.get("profileCacheHits") === true,
       });
       if (cancelRequested) rc = -2; // killed on purpose — skip retries below
       if (rc === 0 && useDaemon && !slidesFresh()) {
@@ -1369,6 +1465,8 @@ async function pipeline(filePath, opts = {}) {
         rc = await exec(renderArgs, "render", {
           skip_reversing: turbo,
           x264_preset: turbo ? "ultrafast" : (conf.get("x264Preset") || null),
+          cache_fast_path: conf.get("cacheFastPath") !== false,
+          profile_cache_hits: conf.get("profileCacheHits") === true,
         });
         if (rc === 0 && !slidesFresh()) rc = 1;
       }
