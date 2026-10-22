@@ -287,6 +287,16 @@
           "type": "boolean",
           "default": true,
           "description": "If you save a REAL code change while a render is running, kill the now-obsolete render and immediately start rendering the new code. A no-op save (identical file) never interrupts a running render."
+        },
+        "manimSlidesPreview.cacheFastPath": {
+          "type": "boolean",
+          "default": true,
+          "description": "In the warm Cairo render daemon, bypass redundant frame captures for cached animations while preserving scene-state updates. Disable to compare behavior. Has no effect in subprocess fallback or OpenGL."
+        },
+        "manimSlidesPreview.profileCacheHits": {
+          "type": "boolean",
+          "default": false,
+          "description": "Print per-animation timing to .manim-slides-preview/msp.log: total, hash, state simulation, other overhead, and avoided Cairo frames. Enable temporarily when diagnosing slow cached animations. Requires the render daemon."
         }
       }
     }
