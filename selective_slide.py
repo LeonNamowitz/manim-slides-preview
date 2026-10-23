@@ -339,12 +339,21 @@ class SlidePrefixCache:
 
 
 _SLIDE_CACHE = SlidePrefixCache()
-if BaseSlide is not None:
-    _original_next_slide = BaseSlide.next_slide
+# Slide.next_slide calls BaseSlide.next_slide.__wrapped__ internally: never
+# monkeypatch BaseSlide.next_slide, or the upstream __wrapped__ lookup breaks.
+# Patch the concrete Manim Slide boundary instead.
+try:
+    from manim_slides.slide.manim import Slide as _ManimSlide
+    from functools import wraps as _wraps
+    _original_slide_boundary = _ManimSlide.next_slide
 
+    @_wraps(_original_slide_boundary)
     def _selective_next_slide(self, *args, **kwargs):
-        result = _original_next_slide(self, *args, **kwargs)
+        result = _original_slide_boundary(self, *args, **kwargs)
         _SLIDE_CACHE.slide_boundary(self)
         return result
 
-    BaseSlide.next_slide = _selective_next_slide
+    _ManimSlide.next_slide = _selective_next_slide
+except Exception as _selective_patch_error:
+    print("[msp-selective] unavailable: " + str(_selective_patch_error)[:160],
+          flush=True)
