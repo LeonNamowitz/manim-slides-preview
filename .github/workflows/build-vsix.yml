@@ -36,6 +36,15 @@ jobs:
           python -m py_compile /tmp/manim-preview-daemon.py
       - name: Package extension
         run: npm run package
+      - name: Verify packaged VSIX
+        shell: bash
+        run: |
+          vsix=$(find . -maxdepth 1 -name '*.vsix' -print -quit)
+          test -n "$vsix"
+          unzip -l "$vsix" | grep 'extension/extension.min.js'
+          unzip -p "$vsix" extension/extension.min.js > /tmp/extension-bundle.js
+          node --check /tmp/extension-bundle.js
+          grep -F '[msp-perf]' /tmp/extension-bundle.js > /dev/null
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
