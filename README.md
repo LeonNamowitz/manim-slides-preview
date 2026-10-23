@@ -228,7 +228,24 @@ The warm Cairo renderer avoids rasterizing frames that Manim already has in its 
 
 For diagnostics, temporarily enable `manimSlidesPreview.profileCacheHits: true`. Render the same scene twice; edit one animation on the third run. The `.manim-slides-preview/msp.log` file records `[msp-perf]` lines with total, hashing, state-update and other time per animation, plus avoided Cairo frame captures, optimized FadeOut counts and function-source cache hits. Turn profiling off after measuring.
 
-The `Build VSIX` GitHub Action runs on pushes to `perf` (or via **Run workflow**) and uploads a VSIX artifact under the workflow run. The workflow verifies JavaScript and embedded Python syntax and packages the extension; it does not execute graphical Manim integration tests.
+### Selective slide-prefix rendering (perf-v2; experimental)
+
+The optional \`manimSlidesPreview.selectiveSlides\` mode avoids repeatedly computing Manim's expensive full-object animation hashes for **unchanged slide prefixes**. It is disabled by default because arbitrary Python can produce different output from identical source (time, randomness, environment, data files, side effects). Enable it for deterministic decks in VS Code settings:
+
+\`\`\`json
+{
+  "manimSlidesPreview.useDaemon": true,
+  "manimSlidesPreview.cache": true,
+  "manimSlidesPreview.cacheFastPath": true,
+  "manimSlidesPreview.selectiveSlides": true
+}
+\`\`\`
+
+After a **successful first render**, the daemon records a compact slide manifest. On a later code edit it compares the AST of each \`construct()\` section separated by *direct* \`self.next_slide()\` calls, verifies that the rest of the source file and all project Python dependencies are unchanged, and reuses the cached animation hashes of matching prefix sections. It also compares animation class, mobject name and duration before accepting a cached hash. Changes to globals, helpers, imports, render settings, Python dependencies, or incompatible source layout fall back to normal hashing. Helper-created slide boundaries (for example \`LessonSlide.reveal()\`) are counted as animations but not as separate source checkpoints. The log reports \`[msp-selective]\` with reusable and actually reused play counts.
+
+**Limits:** This is NOT a Python execution checkpoint. Manim still executes all earlier scene-building code to establish correct state, but skips most hashing and all video encoding for a verified unchanged prefix. Editing near the **end** of a long presentation saves the most time; editing the **first slide** provides little or no benefit. Source checks cannot prove that dynamically read values or side-effectful code are unchanged, so keep this setting **off** for non-deterministic decks. The feature works in the in-process Cairo daemon only; other renderers/subprocesses transparently use Manim's usual rendering.
+
+The \`Build VSIX\` GitHub Action runs on pushes to \`perf\` and \`perf-v2\` (or via **Run workflow**). It tests JS syntax, Python syntax, slide-prefix regression cases, and VSIX packaging. It does not execute a graphical Manim integration render.
 
 ## 9. Commands
 
