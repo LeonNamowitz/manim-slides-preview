@@ -50,6 +50,53 @@ MARKER_DECK = (
 )
 
 
+HELPER_DECK = '''
+class LessonSlide:
+    def __init__(self):
+        self.events = []
+    def heading(self, title):
+        # Existing objects are cleared on every heading, like the real base.
+        self.events.append("heading " + title)
+    def bullet_column(self, values):
+        return list(values)
+    def next_slide(self):
+        self.events.append("pause")
+    def play(self, obj):
+        self.events.append("show " + obj)
+    def reveal(self, *objects):
+        for obj in objects:
+            self.play(obj)
+            self.next_slide()
+    def finish_slide(self):
+        self.next_slide()
+
+SHARED_TITLE = "Infos"
+class Deck(LessonSlide):
+    def construct(self):
+        self.show_info()
+        self.show_criteria()
+        self.show_submissions()
+
+    def show_info(self):
+        self.heading(SHARED_TITLE)
+        info = self.bullet_column(["Leon", "E-mail"])
+        self.next_slide()
+        self.reveal(*info)
+        # finish_slide() deliberately not called
+
+    def show_criteria(self):
+        self.heading("Scheinkriterien")
+        criteria = self.bullet_column(["attendance", "points"])
+        self.reveal(*criteria)
+
+    def show_submissions(self):
+        self.heading("Abgaben")
+        self.reveal("PDF")
+'''
+
+
+
+
 class IndependentTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -198,6 +245,170 @@ class IndependentTests(unittest.TestCase):
         code = MARKER_DECK.rstrip() + "\n        self.section()\n"
         with self.assertRaisesRegex(ValueError, "trailing"):
             sec.partition(code, "Deck")
+
+    def _helper_source(self, content=HELPER_DECK):
+        self.source.write_text(content, encoding="utf-8")
+        return self.plan()
+
+    def test_helper_method_sections_preserve_full_content_and_reveal_pauses(self):
+        initial = self._helper_source()
+        self.assertEqual(initial["mode"], "helper-methods")
+        self.assertEqual(len(initial["scenes"]), 3)
+        self.assertEqual(len(initial["dirty"]), 3)
+        ns = {"__name__": "independent_helpers"}
+        exec(compile(Path(initial["source"]).read_text(encoding="utf-8"),
+                     initial["source"], "exec"), ns)
+        scenes = [ns[name]() for name in initial["scenes"]]
+        for scene in scenes:
+            scene.construct()
+        self.assertEqual(scenes[0].events,
+                         ["heading Infos", "pause", "show Leon", "pause",
+                          "show E-mail", "pause"])
+        self.assertEqual(scenes[1].events,
+                         ["heading Scheinkriterien", "show attendance", "pause",
+                          "show points", "pause"])
+        self.assertEqual(scenes[2].events,
+                         ["heading Abgaben", "show PDF", "pause"])
+        self.commit(initial)
+        repeat = self.plan()
+        self.assertEqual(repeat["dirty"], [])
+        self.assertEqual(repeat["reused"], initial["scenes"])
+
+    def test_edit_one_helper_method_rerenders_only_that_section(self):
+        initial = self._helper_source()
+        self.commit(initial)
+        changed = HELPER_DECK.replace('"attendance", "points"',
+                                      '"attendance", "more points"')
+        updated = self._helper_source(changed)
+        self.assertEqual(updated["dirty"], [initial["scenes"][1]])
+        self.assertEqual(updated["reused"],
+                         [initial["scenes"][0], initial["scenes"][2]])
+        self.commit(updated)
+        self.assertEqual(self.plan()["dirty"], [])
+
+    def test_helper_method_docstring_change_is_local_to_section(self):
+        initial = self._helper_source()
+        self.commit(initial)
+        changed = HELPER_DECK.replace(
+            '    def show_criteria(self):\n',
+            '    def show_criteria(self):\n        """New description."""\n')
+        result = self._helper_source(changed)
+        self.assertEqual(result["dirty"], [initial["scenes"][1]])
+
+    def test_unchanged_helper_order_preserved_and_reorder_invalidates_positions(self):
+        initial = self._helper_source()
+        self.commit(initial)
+        changed = HELPER_DECK.replace(
+            '        self.show_info()\n        self.show_criteria()\n',
+            '        self.show_criteria()\n        self.show_info()\n')
+        updated = self._helper_source(changed)
+        self.assertEqual(updated["dirty"], initial["scenes"][:2])
+        self.assertEqual(updated["reused"], initial["scenes"][2:])
+        ns = {"__name__": "helpers_reordered"}
+        exec(compile(Path(updated["source"]).read_text(encoding="utf-8"),
+                     updated["source"], "exec"), ns)
+        first = ns[updated["scenes"][0]]()
+        first.construct()
+        self.assertEqual(first.events[0], "heading Scheinkriterien")
+
+    def test_shared_helper_changes_invalidate_all_helper_sections(self):
+        initial = self._helper_source()
+        self.commit(initial)
+        changed = HELPER_DECK.replace('self.events.append("show " + obj)',
+                                      'self.events.append("display " + obj)')
+        self.assertEqual(self._helper_source(changed)["dirty"],
+                         initial["scenes"])
+
+    def test_unrelated_scene_class_helper_changes_invalidate_all(self):
+        initial = self._helper_source()
+        self.commit(initial)
+        changed = HELPER_DECK.replace(
+            '    def show_submissions(self):',
+            '    def supporting_helper(self):\n        return 42\n\n'
+            '    def show_submissions(self):')
+        self.assertEqual(self._helper_source(changed)["dirty"],
+                         initial["scenes"])
+
+    def test_module_level_value_changes_invalidate_all(self):
+        initial = self._helper_source()
+        self.commit(initial)
+        changed = HELPER_DECK.replace('SHARED_TITLE = "Infos"',
+                                      'SHARED_TITLE = "Information"')
+        self.assertEqual(self._helper_source(changed)["dirty"],
+                         initial["scenes"])
+
+    def test_helper_dependency_file_changes_invalidate_all(self):
+        helper = self.root / "slide_utils" / "slides.py"
+        helper.parent.mkdir(parents=True)
+        helper.write_text("VALUE = 1\n", encoding="utf-8")
+        initial = self._helper_source()
+        self.commit(initial)
+        helper.write_text("VALUE = 2\n", encoding="utf-8")
+        self.assertEqual(self.plan()["dirty"], initial["scenes"])
+
+    def test_render_option_change_invalidates_all_helper_sections(self):
+        initial = self._helper_source()
+        self.commit(initial)
+        self.settings[0] = "-qh"
+        self.assertEqual(self.plan()["dirty"], initial["scenes"])
+
+    def test_missing_helper_method_fallback_reason(self):
+        changed = HELPER_DECK.replace("    def show_submissions(self):",
+                                      "    def unused_submissions(self):")
+        with self.assertRaisesRegex(ValueError, "section method show_submissions"):
+            sec.partition(changed, "Deck")
+
+    def test_helper_without_initial_heading_fallback_reason(self):
+        changed = HELPER_DECK.replace(
+            '        self.heading("Scheinkriterien")\n',
+            '        self.next_slide()\n')
+        with self.assertRaisesRegex(ValueError, "must start with self.heading"):
+            sec.partition(changed, "Deck")
+
+    def test_helper_decorated_or_argumented_fallback(self):
+        changed = HELPER_DECK.replace(
+            "    def show_criteria(self):", "    def show_criteria(self, x):")
+        with self.assertRaisesRegex(ValueError, "undecorated"):
+            sec.partition(changed, "Deck")
+        changed = HELPER_DECK.replace(
+            "        self.show_criteria()", '        self.show_criteria("oops")')
+        with self.assertRaisesRegex(ValueError, "only argument-free"):
+            sec.partition(changed, "Deck")
+
+    def test_helper_construct_extra_statements_fall_back(self):
+        changed = HELPER_DECK.replace(
+            "        self.show_criteria()",
+            "        saved = 5\n        self.show_criteria()")
+        with self.assertRaisesRegex(ValueError, "without other statements"):
+            sec.partition(changed, "Deck")
+
+    def test_helper_cross_section_state_dependency_falls_back(self):
+        changed = HELPER_DECK.replace(
+            '        info = self.bullet_column(["Leon", "E-mail"])',
+            '        self.saved = "bad"\n'
+            '        info = self.bullet_column(["Leon", "E-mail"])')
+        with self.assertRaisesRegex(ValueError, "attribute mutations"):
+            sec.partition(changed, "Deck")
+
+    def test_helper_calls_another_section_method_falls_back(self):
+        changed = HELPER_DECK.replace(
+            '        self.reveal("PDF")',
+            '        self.show_info()\n        self.reveal("PDF")')
+        with self.assertRaisesRegex(ValueError, "nested show"):
+            sec.partition(changed, "Deck")
+
+    def test_helper_finish_slide_boundary_kept_when_present(self):
+        changed = HELPER_DECK.replace(
+            '        self.reveal("PDF")',
+            '        self.reveal("PDF")\n        self.finish_slide()')
+        p = self._helper_source(changed)
+        ns = {"__name__": "helper_with_finish"}
+        exec(compile(Path(p["source"]).read_text(encoding="utf-8"),
+                     p["source"], "exec"), ns)
+        last = ns[p["scenes"][-1]]()
+        last.construct()
+        self.assertEqual(last.events, ["heading Abgaben", "show PDF", "pause",
+                                       "pause"])
 
     def test_cross_section_local_rejected(self):
         code = DECK.replace('second_local = "beta"', 'second_local = first_local')
