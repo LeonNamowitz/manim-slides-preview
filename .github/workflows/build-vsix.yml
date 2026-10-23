@@ -48,11 +48,14 @@ jobs:
           compile(combined, '<warm-daemon>', 'exec')
           assert 'class SlidePrefixCache' in combined
           PY
+      - name: Remove checked-in legacy VSIX files
+        run: rm -f -- ./*.vsix
       - name: Package extension
         run: npm run package
       - name: Verify packaged VSIX
         shell: bash
         run: |
+          test "$(find . -maxdepth 1 -name '*.vsix' | wc -l)" -eq 1
           vsix=$(find . -maxdepth 1 -name '*.vsix' -print -quit)
           test -n "$vsix"
           unzip -l "$vsix" | grep 'extension/extension.min.js'
@@ -65,10 +68,15 @@ jobs:
           node -e 'const p=require("/tmp/packaged-extension-package.json"); if(p.version!=="1.8.0") process.exit(1)'
           grep -F 'perf-v2-cachefix' /tmp/extension-bundle.js > /dev/null
           grep -F '[msp-build]' /tmp/extension-bundle.js > /dev/null
+      - name: Stage only the verified VSIX
+        run: |
+          mkdir -p dist-vsix
+          mv -- ./*.vsix dist-vsix/
+          sha256sum dist-vsix/*.vsix
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
-          name: manim-slides-preview-perf-vsix
-          path: '*.vsix'
+          name: manim-slides-preview-v1.8.0-perf-v2
+          path: dist-vsix/*.vsix
           if-no-files-found: error
           retention-days: 30
