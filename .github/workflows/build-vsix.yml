@@ -48,6 +48,10 @@ jobs:
           compile(combined, '<warm-daemon>', 'exec')
           assert 'class SlidePrefixCache' in combined
           PY
+      - name: Test independently renderable sections
+        run: |
+          python -m py_compile independent_sections.py
+          python tests/test_independent_sections.py
       - name: Remove checked-in legacy VSIX files
         run: rm -f -- ./*.vsix
       - name: Package extension
@@ -64,8 +68,9 @@ jobs:
           grep -F '[msp-perf]' /tmp/extension-bundle.js > /dev/null
           grep -F 'selective_slide.py' /tmp/extension-bundle.js > /dev/null
           unzip -l "$vsix" | grep 'extension/selective_slide.py'
+          unzip -l "$vsix" | grep 'extension/independent_sections.py'
           unzip -p "$vsix" extension/package.json > /tmp/packaged-extension-package.json
-          node -e 'const p=require("/tmp/packaged-extension-package.json"); if(p.version!=="1.8.0") process.exit(1)'
+          node -e 'const p=require("/tmp/packaged-extension-package.json"); if(p.version!=="1.9.0") process.exit(1)'
           grep -F 'perf-v2-cachefix' /tmp/extension-bundle.js > /dev/null
           grep -F '[msp-build]' /tmp/extension-bundle.js > /dev/null
       - name: Stage only the verified VSIX
@@ -76,7 +81,7 @@ jobs:
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
-          name: manim-slides-preview-v1.8.0-perf-v2
+          name: manim-slides-preview-v1.9.0-perf-v2
           path: dist-vsix/*.vsix
           if-no-files-found: error
           retention-days: 30
