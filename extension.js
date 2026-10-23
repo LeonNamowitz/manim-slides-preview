@@ -39,7 +39,7 @@ const OUT_DIR_NAME = ".manim-slides-preview";
 let EXT_VERSION = "?";
 try { EXT_VERSION = require("./package.json").version; } catch (_) {}
 const CACHE_DIR_NAME = "cache"; // hidden pycache-style store inside OUT_DIR_NAME
-const BUILD_TAG = "perf-v2-independent-v1.9"; // visible in logs to distinguish installed VSIX builds
+const BUILD_TAG = "perf-v2-section-markers-v1.10"; // visible in logs to distinguish installed VSIX builds
 
 // Python daemon: imports manim/manim-slides ONCE, then executes render/convert
 // requests in-process — every save skips interpreter startup + imports
@@ -70,7 +70,7 @@ except Exception:
 _CACHE_FAST = {"enabled": True, "profile": False, "hash_ms": 0.0,
                "state_ms": 0.0, "skipped_frames": 0, "skipped_static": 0,
                "skipped_fades": 0}
-print("[msp-build] perf-v2-independent-v1.9", flush=True)
+print("[msp-build] perf-v2-section-markers-v1.10", flush=True)
 try:
     import manim.renderer.cairo_renderer as _cairo
     from manim.renderer.cairo_renderer import CairoRenderer as _Cairo
