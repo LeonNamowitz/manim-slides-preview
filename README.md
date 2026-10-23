@@ -224,9 +224,9 @@ Four layers, all automatic:
 
 ### Cached-animation performance (perf branch)
 
-The warm Cairo renderer avoids rasterizing frames that Manim already has in its partial-video cache. Animation interpolation and scene-state updates still run, preserving subsequent animations. This fast path is enabled by default and can be disabled with `manimSlidesPreview.cacheFastPath: false` for an A/B comparison. It is not used by subprocess fallback or OpenGL.
+The warm Cairo renderer avoids rasterizing frames that Manim already has in its partial-video cache. It also memoizes unchanged Python function source text used by Manim's hash serializer (not the mutable mobject contents), and bypasses costly setup/copying for cached plain `FadeOut` animations only when there are no updaters, custom callbacks, custom rate functions, or custom mobject classes. Animation interpolation and scene-state updates still run, preserving subsequent animations. This fast path is enabled by default and can be disabled with `manimSlidesPreview.cacheFastPath: false` for an A/B comparison. It is not used by subprocess fallback or OpenGL.
 
-For diagnostics, temporarily enable `manimSlidesPreview.profileCacheHits: true`. Render the same scene twice; edit one animation on the third run. The `.manim-slides-preview/msp.log` file records `[msp-perf]` lines with total, hashing, state-update and other time per animation, plus avoided Cairo frame captures. Turn profiling off after measuring.
+For diagnostics, temporarily enable `manimSlidesPreview.profileCacheHits: true`. Render the same scene twice; edit one animation on the third run. The `.manim-slides-preview/msp.log` file records `[msp-perf]` lines with total, hashing, state-update and other time per animation, plus avoided Cairo frame captures, optimized FadeOut counts and function-source cache hits. Turn profiling off after measuring.
 
 The `Build VSIX` GitHub Action runs on pushes to `perf` (or via **Run workflow**) and uploads a VSIX artifact under the workflow run. The workflow verifies JavaScript and embedded Python syntax and packages the extension; it does not execute graphical Manim integration tests.
 
