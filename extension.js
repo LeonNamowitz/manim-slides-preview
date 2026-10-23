@@ -173,13 +173,16 @@ try:
         return _original_freeze_frame(self, duration)
 
     def _measure_hash(*args, **kwargs):
-        if not _CACHE_FAST["profile"]:
-            return _original_hash_play(*args, **kwargs)
-        t = _clock()
+        t = _clock() if _CACHE_FAST["profile"] else None
         try:
+            if "_SLIDE_CACHE" in globals() and _SLIDE_CACHE.active and len(args) >= 3:
+                reused = _SLIDE_CACHE.hash_or_none(args[0], args[2])
+                if reused is not None:
+                    return reused
             return _original_hash_play(*args, **kwargs)
         finally:
-            _CACHE_FAST["hash_ms"] += (_clock() - t) * 1000
+            if t is not None:
+                _CACHE_FAST["hash_ms"] += (_clock() - t) * 1000
 
     def _measure_state(self, *args, **kwargs):
         if getattr(self, "_msp_cached_fades", False):
@@ -234,7 +237,14 @@ try:
     _Cairo.render = _cache_render_frame
     _Cairo.save_static_frame_data = _cache_static_frame
     _Cairo.freeze_current_frame = _cache_freeze_frame
-    _Cairo.play = _measure_play
+    def _selective_play(self, scene, *args, **kwargs):
+        before = self.num_plays
+        result = _measure_play(self, scene, *args, **kwargs)
+        if "_SLIDE_CACHE" in globals() and _SLIDE_CACHE.active:
+            _SLIDE_CACHE.play_finished(scene, self, before)
+        return result
+
+    _Cairo.play = _selective_play
     _cairo.get_hash_from_play_call = _measure_hash
     _Scene.play_internal = _measure_state
     _Scene.begin_animations = _begin_cached_fades
@@ -292,6 +302,8 @@ try:
     _msu.Pool = _SeqPool
 except Exception:
     pass
+
+# SELECTIVE_HELPER_PLACEHOLDER
 
 # Stall visibility: while a request runs, dump all thread stacks to stderr
 # every 5 minutes -> if anything ever wedges, the log shows exactly where.
@@ -361,6 +373,7 @@ while True:
     _PRESET["value"] = req.get("x264_preset") or None
     _CACHE_FAST["enabled"] = bool(req.get("cache_fast_path", True))
     _CACHE_FAST["profile"] = bool(req.get("profile_cache_hits", False))
+    _SLIDE_CACHE.begin(req)
     if "_cached_code_source" in globals():
         _cached_code_source.cache_clear()  # fresh request: changed source files
     t = time.time()
@@ -368,6 +381,7 @@ while True:
         try: faulthandler.dump_traceback_later(300, repeat=True, exit=False)
         except Exception: pass
     rc = run(req.get("args", []), bool(req.get("in_process", True)))
+    _SLIDE_CACHE.complete(rc == 0)
     if faulthandler:
         try: faulthandler.cancel_dump_traceback_later()
         except Exception: pass
@@ -385,6 +399,12 @@ while True:
     except Exception:
         pass
 `;
+
+// Inject a tested Python helper into the daemon before its request loop.
+const FINAL_DAEMON_SCRIPT = DAEMON_SCRIPT.replace(
+  "# SELECTIVE_HELPER_PLACEHOLDER",
+  fs.readFileSync(path.join(__dirname, "selective_slide.py"), "utf8")
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -861,7 +881,7 @@ function ensureDaemon(workDir) {
   daemons.set(workDir, d);
 
   log(`\n[daemon] starting: ${py.join(" ")} (cwd: ${workDir})`);
-  const child = cp.spawn(py[0], [...py.slice(1), "-u", "-c", DAEMON_SCRIPT], {
+  const child = cp.spawn(py[0], [...py.slice(1), "-u", "-c", FINAL_DAEMON_SCRIPT], {
     cwd: workDir,
     env: buildEnv(),
     shell: false,
@@ -1549,6 +1569,9 @@ async function pipeline(filePath, opts = {}) {
         x264_preset: turbo ? "ultrafast" : (conf.get("x264Preset") || null),
         cache_fast_path: conf.get("cacheFastPath") !== false,
         profile_cache_hits: conf.get("profileCacheHits") === true,
+        selective_slides: useCache && conf.get("selectiveSlides") !== false && conf.get("cacheFastPath") !== false,
+        selective_root: rootDir,
+        selective_store: path.join(previewDir, CACHE_DIR_NAME, "slide-manifests"),
       });
       if (cancelRequested) rc = -2; // killed on purpose — skip retries below
       if (rc === 0 && useDaemon && !slidesFresh()) {
@@ -1560,6 +1583,9 @@ async function pipeline(filePath, opts = {}) {
           x264_preset: turbo ? "ultrafast" : (conf.get("x264Preset") || null),
           cache_fast_path: conf.get("cacheFastPath") !== false,
           profile_cache_hits: conf.get("profileCacheHits") === true,
+          selective_slides: useCache && conf.get("selectiveSlides") !== false && conf.get("cacheFastPath") !== false,
+          selective_root: rootDir,
+          selective_store: path.join(previewDir, CACHE_DIR_NAME, "slide-manifests"),
         });
         if (rc === 0 && !slidesFresh()) rc = 1;
       }
