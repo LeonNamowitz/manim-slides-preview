@@ -191,6 +191,17 @@ class SelectiveTests(unittest.TestCase):
         self.cache.begin(self.request())
         self.assertEqual(self.cache.scenes["Deck"]["allow"], 3)
 
+    def test_utf8_bom_source_is_supported(self):
+        self.source.write_text("\ufeff" + SOURCE, encoding="utf-8")
+        self.cache.begin(self.request())
+        self.assertTrue(self.cache.active)
+        self.assertIn("Deck", self.cache.scenes)
+
+    def test_helper_created_boundaries_do_not_change_block_count(self):
+        src = SOURCE.replace('self.play(Write(Text("one")))',
+                             'self.reveal(Write(Text("one")))')
+        self.assertEqual(len(mod._source_layout(src, "Deck")["blocks"]), 3)
+
     def test_disabled_mode_never_reuses(self):
         self.seed()
         req = self.request()
