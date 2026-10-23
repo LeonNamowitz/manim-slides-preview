@@ -300,8 +300,8 @@
         },
         "manimSlidesPreview.selectiveSlides": {
           "type": "boolean",
-          "default": true,
-          "description": "Reuse animation hashes and partial videos from unchanged slide prefixes when a supported deterministic Slide.construct has explicit self.next_slide() boundaries. Changed slides and later slides render normally. Python still executes earlier slide code to preserve state. Falls back automatically on unsupported layouts, dependency changes or animation mismatches; disable for scripts using random/time/external data."
+          "default": false,
+          "description": "EXPERIMENTAL, opt-in: for deterministic presentations with top-level self.next_slide() checkpoints, reuse old video hashes for unchanged prefixes after edits. Changed slides and all subsequent slides still hash/render normally, and earlier Python code still executes. Falls back on structural or dependency changes. Disable for runtime data, randomness, clock-dependent or side-effectful content."
         }
       }
     }
