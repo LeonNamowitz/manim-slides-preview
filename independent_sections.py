@@ -41,58 +41,212 @@ def dependencies(root,source):
             if len(rows)>=400 or size>16000000: raise ValueError("dependency scan too large")
             rows.append([item.relative_to(root).as_posix(),sha(blob)])
     return sha(json.dumps(rows,separators=(",",":")))
-def partition(code,scene):
-    module=ast.parse(code)
-    classes=[c for c in module.body if isinstance(c,ast.ClassDef) and c.name==scene]
-    if len(classes)!=1: raise ValueError("expected one top-level scene class")
-    methods=[f for f in classes[0].body if isinstance(f,ast.FunctionDef) and f.name=="construct"]
-    if len(methods)!=1: raise ValueError("expected a synchronous construct method")
-    method=methods[0]
-    if method.decorator_list or len(method.args.args)!=1 or method.args.args[0].arg!="self":
+def _scene_method_call(stmt):
+    """Recognize only a bare, argument-free self.show_*() call."""
+    if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
+        return None
+    call = stmt.value
+    fn = call.func
+    if (call.args or call.keywords or not isinstance(fn, ast.Attribute)
+            or not isinstance(fn.value, ast.Name) or fn.value.id != "self"
+            or not re.fullmatch(r"show_[A-Za-z0-9_]+", fn.attr)):
+        return None
+    return fn.attr
+
+
+def _unsafe_section_statements(group, *, reject_section_calls=False):
+    """Check for explicitly detectable dependence on previous scene state."""
+    for stmt in group:
+        for node in ast.walk(stmt):
+            if isinstance(node, (ast.Yield, ast.YieldFrom, ast.Await,
+                                 ast.Global, ast.Nonlocal)):
+                raise ValueError("unsupported section control flow")
+            if (isinstance(node, ast.Attribute)
+                    and isinstance(node.ctx, (ast.Store, ast.Del))
+                    and isinstance(node.value, ast.Name) and node.value.id == "self"):
+                raise ValueError("direct scene attribute mutations unsupported")
+            if (reject_section_calls and isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "self"
+                    and (node.func.attr.startswith("show_")
+                         or node.func.attr == "section")):
+                raise ValueError(
+                    "nested show_*()/section() calls in section methods unsupported"
+                )
+
+
+def _module_scene(module, scene):
+    classes = [cls for cls in module.body
+               if isinstance(cls, ast.ClassDef) and cls.name == scene]
+    if len(classes) != 1:
+        raise ValueError("expected one top-level scene class")
+    cls = classes[0]
+    methods = [method for method in cls.body
+               if isinstance(method, ast.FunctionDef) and method.name == "construct"]
+    if len(methods) != 1:
+        raise ValueError("expected a synchronous construct method")
+    construct = methods[0]
+    if (construct.decorator_list or construct.args.posonlyargs
+            or len(construct.args.args) != 1
+            or construct.args.args[0].arg != "self"
+            or construct.args.kwonlyargs or construct.args.vararg
+            or construct.args.kwarg):
         raise ValueError("construct must be undecorated construct(self)")
-    groups=[]
-    for node in method.body:
+    return cls, construct
+
+
+def _helper_sections(cls, construct):
+    """Return (groups, own-method ASTs), or None when not a helper deck.
+
+    Helper-mode requires the ENTIRE construct body to be an ordered sequence
+    of bare self.show_*() calls. Anything else falls back rather than
+    accidentally splitting state-dependent code.
+    """
+    statements = list(construct.body)
+    # A method docstring has no effect on section ordering.
+    if (statements and isinstance(statements[0], ast.Expr)
+            and isinstance(statements[0].value, ast.Constant)
+            and isinstance(statements[0].value.value, str)):
+        statements.pop(0)
+    if not statements or not _scene_method_call(statements[0]):
+        return None
+    calls = [_scene_method_call(stmt) for stmt in statements]
+    if any(name is None for name in calls):
+        raise ValueError(
+            "helper sections require construct() to contain only "
+            "argument-free self.show_*() calls, without other statements"
+        )
+    if len(calls) < 2:
+        raise ValueError("need at least two independent show_*() sections")
+    if len(set(calls)) != len(calls):
+        raise ValueError("repeated show_*() section calls are unsupported")
+    definitions = {}
+    for method in cls.body:
+        if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definitions.setdefault(method.name, []).append(method)
+
+    groups, methods = [], []
+    for stmt, name in zip(statements, calls):
+        found = definitions.get(name, [])
+        if len(found) != 1 or not isinstance(found[0], ast.FunctionDef):
+            raise ValueError(
+                f"section method {name} must be defined once in the scene class"
+            )
+        method = found[0]
+        args = method.args
+        if (method.decorator_list or args.posonlyargs
+                or len(args.args) != 1 or args.args[0].arg != "self"
+                or args.kwonlyargs or args.vararg or args.kwarg):
+            raise ValueError(
+                f"section method {name} must be undecorated {name}(self)"
+            )
+        body = list(method.body)
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            body.pop(0)
+        if not body or not heading(body[0]):
+            raise ValueError(f"section method {name} must start with self.heading(...)")
+        _unsafe_section_statements(body, reject_section_calls=True)
+        # An additional heading would reset objects inside one section.
+        # It is safer to reject it than silently creating unexpected slides.
+        for node in ast.walk(ast.Module(body=body[1:], type_ignores=[])):
+            if isinstance(node, ast.Call) and boundary_call(node):
+                raise ValueError(
+                    f"section method {name} contains another heading/section boundary"
+                )
+        groups.append([stmt])  # Execute the ORIGINAL bound method.
+        methods.append(method)
+    return groups, methods
+
+
+def _inline_sections(construct):
+    groups = []
+    for node in construct.body:
         is_boundary = heading(node) or section_marker(node)
-        # A normal heading or an exact bare self.section() starts a section.
-        # Consecutive declarations (e.g. section() followed by heading())
-        # describe ONE section rather than generating an empty extra scene.
+        # Adjacent section() then heading() is one section, as before.
         if is_boundary:
-            if not groups or any(not (heading(n) or section_marker(n)) for n in groups[-1]):
+            if not groups or any(not (heading(n) or section_marker(n))
+                                 for n in groups[-1]):
                 groups.append([])
         elif not groups:
-            raise ValueError("construct must start with self.heading(...) or self.section()")
+            raise ValueError(
+                "construct must start with self.heading(...) or self.section(), "
+                "or consist entirely of argument-free self.show_*() calls"
+            )
         if any(boundary_call(child) for child in ast.walk(node)
-               if isinstance(child,ast.Call) and
+               if isinstance(child, ast.Call) and
                not (is_boundary and child is node.value)):
             raise ValueError("nested or invalid section/heading call")
-        if not is_boundary and isinstance(node,ast.Expr) and isinstance(node.value,ast.Call) and boundary_call(node.value):
+        if (not is_boundary and isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Call)
+                and boundary_call(node.value)):
             raise ValueError("self.section() takes no arguments")
-        if any(isinstance(child,(ast.Yield,ast.YieldFrom,ast.Await,ast.Global,ast.Nonlocal))
-               for child in ast.walk(node)): raise ValueError("unsupported control flow")
+        _unsafe_section_statements([node])
         groups[-1].append(node)
-    if len(groups)<2: raise ValueError("need at least two independent sections")
+    if len(groups) < 2:
+        raise ValueError("need at least two independent sections")
     if all(section_marker(n) for n in groups[-1]):
         raise ValueError("trailing self.section() has no content")
-    prior=set()
+    prior = set()
     for group in groups:
-        stored={n.id for stmt in group for n in ast.walk(stmt)
-                if isinstance(n,ast.Name) and isinstance(n.ctx,ast.Store)}
-        loaded={n.id for stmt in group for n in ast.walk(stmt)
-                if isinstance(n,ast.Name) and isinstance(n.ctx,ast.Load)}
-        conflict=(loaded & prior)-stored
-        if conflict: raise ValueError("cross-section locals: "+", ".join(sorted(conflict)[:5]))
-        for stmt in group:
-            for node in ast.walk(stmt):
-                if (isinstance(node,ast.Attribute) and
-                    isinstance(node.ctx,(ast.Store,ast.Del)) and
-                    isinstance(node.value,ast.Name) and node.value.id=="self"):
-                    raise ValueError("direct scene attribute mutations unsupported")
+        stored = {n.id for stmt in group for n in ast.walk(stmt)
+                  if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+        loaded = {n.id for stmt in group for n in ast.walk(stmt)
+                  if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        conflict = (loaded & prior) - stored
+        if conflict:
+            raise ValueError("cross-section locals: " + ", ".join(sorted(conflict)[:5]))
         prior.update(stored)
-    original=method.body
-    method.body=[ast.Pass()]
-    env=sha(ast.dump(module,include_attributes=False))
-    method.body=original
-    return env,groups
+    return groups
+
+
+def partition_details(code, scene):
+    """Return environment, generated bodies, section hashes, and mode.
+
+    The common environment deliberately excludes the body of construct()
+    AND the bodies of selected section methods. Changes to one selected
+    method then invalidate only its fingerprint, whereas changes to other
+    methods, imports, globals and external Python files invalidate all.
+    """
+    module = ast.parse(code)
+    cls, construct = _module_scene(module, scene)
+    helper = _helper_sections(cls, construct)
+    if helper is not None:
+        groups, methods = helper
+        mode = "helper-methods"
+        fingerprints = [
+            ast.dump(method, include_attributes=False) for method in methods
+        ]
+    else:
+        groups = _inline_sections(construct)
+        methods = []
+        mode = "inline"
+        fingerprints = [
+            ast.dump(ast.Module(body=group, type_ignores=[]),
+                     include_attributes=False)
+            for group in groups
+        ]
+    original_body = construct.body
+    own_bodies = [method.body for method in methods]
+    try:
+        construct.body = [ast.Pass()]
+        for method in methods:
+            method.body = [ast.Pass()]
+        environment = sha(ast.dump(module, include_attributes=False))
+    finally:
+        construct.body = original_body
+        for method, original in zip(methods, own_bodies):
+            method.body = original
+    return environment, groups, fingerprints, mode
+
+
+def partition(code, scene):
+    """Retain the original two-value parser interface for existing callers."""
+    env, groups, _, _ = partition_details(code, scene)
+    return env, groups
+
 def wrapper(source,root,scene,names,groups):
     lines=[
         "# Generated by Manim Slides Preview. Do not edit.",
@@ -117,15 +271,14 @@ def plan(source,root,preview,settings,scene):
     if not source.is_file() or not root.is_dir() or not source.is_relative_to(root):
         raise ValueError("source must belong to workspace")
     code=source.read_text(encoding="utf-8-sig")
-    env,groups=partition(code,scene)
+    env,groups,section_fingerprints,mode=partition_details(code,scene)
     deps=dependencies(root,source)
     salt=sha(str(source).lower()+"\0"+scene)[:10]
     safe=re.sub("[^A-Za-z0-9_]","_",scene)
     names=[safe+"_MSP_"+salt+"_"+str(i).zfill(3) for i in range(len(groups))]
     params=sha(json.dumps(settings,sort_keys=True))
-    stamps=[sha(json.dumps([VERSION,env,deps,params,
-                ast.dump(ast.Module(body=g,type_ignores=[]),include_attributes=False)]))
-            for g in groups]
+    stamps=[sha(json.dumps([VERSION,mode,env,deps,params,fingerprint]))
+            for fingerprint in section_fingerprints]
     folder=preview/"cache"/"independent-sections";folder.mkdir(parents=True,exist_ok=True)
     manifest=folder/(salt+".json");candidate=folder/(salt+".pending.json")
     script=folder/(salt+"_sections.py")
@@ -143,7 +296,7 @@ def plan(source,root,preview,settings,scene):
         script.write_text(content,encoding="utf-8")
     candidate.write_text(json.dumps({"version":VERSION,"sections":dict(zip(names,stamps))}),
                          encoding="utf-8")
-    return {"enabled":True,"source":str(script),"scenes":names,
+    return {"enabled":True,"mode":mode,"source":str(script),"scenes":names,
             "dirty":dirty,"reused":reuse,"manifest":str(manifest),
             "candidate":str(candidate)}
 def main():
