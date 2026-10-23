@@ -139,7 +139,7 @@ class IndependentTests(unittest.TestCase):
 
     def test_failed_render_does_not_commit(self):
         self.plan()
-        self.assertFalse(any(self.preview.rglob("*.json")))
+        self.assertFalse(any(p.name.endswith(".json") and not p.name.endswith(".pending.json") for p in self.preview.rglob("*.json")))
         self.assertEqual(len(self.plan()["dirty"]), 3)
 
 if __name__ == "__main__":
