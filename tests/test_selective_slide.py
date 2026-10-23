@@ -164,6 +164,14 @@ class SelectiveTests(unittest.TestCase):
         self.assertIsNone(self.play(scene, "unexpected one", "fresh_one"))
         self.assertEqual(self.cache.scenes["Deck"]["allow"], 0)
 
+    def test_changed_slide_options_invalidate_later_hashes(self):
+        self.seed()
+        self.source.write_text(
+            SOURCE.replace('self.next_slide()', 'self.next_slide(loop=True)', 1),
+            encoding="utf-8")
+        self.cache.begin(self.request())
+        self.assertEqual(self.cache.scenes["Deck"]["allow"], 0)
+
     def test_nested_slide_boundary_is_unsupported(self):
         text = SOURCE.replace("        self.next_slide()", "        if True:\n            self.next_slide()", 1)
         self.assertIsNone(mod._source_layout(text, "Deck"))
