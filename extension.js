@@ -90,6 +90,9 @@ try:
     import inspect as _stdlib_inspect
     from functools import lru_cache as _lru_cache
     from manim.animation.fading import FadeOut as _FadeOut
+    from manim.animation.animation import Animation as _Animation
+    from manim.utils.rate_functions import smooth as _smooth
+    _default_finish_callback = _Animation.__init__.__kwdefaults__["_on_finish"]
 
     @_lru_cache(maxsize=2048)
     def _cached_code_source(code):
@@ -124,7 +127,16 @@ try:
             mob = anim.mobject
             if mob is None or not anim.suspend_mobject_updating:
                 return False
-            if any(part.updaters for part in mob.get_family()):
+            # Respect custom callbacks, rate functions and user subclasses:
+            # they can have side effects even during a cache hit.
+            if anim._on_finish is not _default_finish_callback:
+                return False
+            if anim.rate_func is not _smooth or anim.reverse_rate_function:
+                return False
+            parts = mob.get_family()
+            if any(part.updaters for part in parts):
+                return False
+            if any(not type(part).__module__.startswith("manim.") for part in parts):
                 return False
         return True
 
