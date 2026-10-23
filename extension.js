@@ -873,7 +873,7 @@ function pythonCmd() {
   return process.platform === "win32" ? ["python"] : ["python3"];
 }
 
-/** Analyze heading-scoped isolated scenes, using the configured Python. */
+/** Analyze isolated scenes, supporting inline boundaries and self.show_* helpers. */
 async function prepareIndependentSections(filePath, fileDir, rootDir, previewDir, scene, conf) {
   const opts = [conf.get("quality") || "-ql", conf.get("turboPreview") === true,
     conf.get("x264Preset") || "", conf.get("extraRenderArgs") || [],
@@ -884,14 +884,14 @@ async function prepareIndependentSections(filePath, fileDir, rootDir, previewDir
   return new Promise((resolve) => cp.execFile(py[0], argv, {
     cwd: fileDir, env: buildEnv(), timeout: 30000, maxBuffer: 1024 * 1024, windowsHide: true,
   }, (err, stdout, stderr) => {
-    if (err) { log("[sections] planner unavailable: " + err.message); return resolve(null); }
+    if (err) { log("[sections] FALLBACK to original scene: planner unavailable: " + err.message); return resolve(null); }
     let plan;
     try { plan = JSON.parse(stdout.trim()); } catch (_) {
-      log("[sections] invalid planner output: " + (stderr || stdout).slice(0, 300));
+      log("[sections] FALLBACK to original scene: invalid planner output: " + (stderr || stdout).slice(0, 300));
       return resolve(null);
     }
     if (!plan.enabled) {
-      log("[sections] original scene fallback: " + (plan.reason || "unsupported"));
+      log("[sections] FALLBACK to original scene: " + (plan.reason || "unsupported structure"));
       return resolve(null);
     }
     if (!Array.isArray(plan.scenes) || plan.scenes.length < 2 ||
@@ -900,10 +900,10 @@ async function prepareIndependentSections(filePath, fileDir, rootDir, previewDir
         !plan.dirty.every((v) => plan.scenes.includes(v)) ||
         !path.isAbsolute(plan.source) || !path.isAbsolute(plan.manifest) ||
         !path.isAbsolute(plan.candidate)) {
-      log("[sections] invalid manifest shape; using original scene");
+      log("[sections] FALLBACK to original scene: invalid manifest shape");
       return resolve(null);
     }
-    log(`[sections] ${plan.scenes.length} isolated · ${plan.dirty.length} rendering · ${plan.reused.length} reused`);
+    log(`[sections] ACTIVE mode=${plan.mode || "inline"} · ${plan.scenes.length} isolated · ${plan.dirty.length} rendering · ${plan.reused.length} reused`);
     resolve(plan);
   }));
 }
