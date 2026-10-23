@@ -1724,6 +1724,7 @@ async function pipeline(filePath, opts = {}) {
     st.scenes = scenes;
     st.originalScenes = originalScenes;
     st.independentSections = !!sectionPlan;
+    st.renderSourcePath = sectionPlan ? sectionPlan.source : filePath;
     st.previewDir = previewDir;
     st.htmlName = htmlName;
     st.fileDir = fileDir;
@@ -1792,7 +1793,8 @@ async function pipeline(filePath, opts = {}) {
     // .mp4 per scene (manim-slides sits on top of a normal manim render).
     // Surface them so users know they get a live presentation AND a finished
     // video for editing/YouTube from the same file, same click.
-    const finals = findFinalVideos(filePath, previewDir).filter((v) => scenes.includes(path.basename(v.path, ".mp4")));
+    const finals = findFinalVideos(sectionPlan ? sectionPlan.source : filePath, previewDir)
+      .filter((v) => scenes.includes(path.basename(v.path, ".mp4")));
     if (finals.length) {
       log("\n🎞 Complete video files (same render — use them for editing / YouTube / course videos):");
       for (const v of finals) {
@@ -1903,7 +1905,8 @@ function activate(context) {
       const wsFolder = vscode.workspace.getWorkspaceFolder(doc.uri);
       const rootDir = wsFolder ? wsFolder.uri.fsPath : fileDir;
       const previewDir = path.join(rootDir, OUT_DIR_NAME);
-      const finals = findFinalVideos(filePath, previewDir);
+      const previous = fileState.get(filePath);
+      const finals = findFinalVideos(previous && previous.renderSourcePath || filePath, previewDir);
       if (!finals.length) {
         vscode.window.showWarningMessage(
           "No rendered videos yet — run 'Manim Slides: Render & Preview' first.");
