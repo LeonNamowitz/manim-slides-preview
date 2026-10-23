@@ -106,6 +106,10 @@ class SelectiveTests(unittest.TestCase):
         # __name__ used as manifest lookup key, same as actual class
         return type("Deck", (Deck,), {} )()
 
+    def frame(self, name="construct"):
+        return types.SimpleNamespace(f_code=types.SimpleNamespace(
+            co_name=name, co_filename=str(self.source)))
+
     def play(self, scene, value, digest):
         anim = FakeAnimation(FakeMobject(value))
         reused = self.cache.hash_or_none(scene, [anim])
@@ -119,9 +123,9 @@ class SelectiveTests(unittest.TestCase):
         self.cache.begin(self.request())
         scene = self.scene()
         self.play(scene, "one", "hash_one")
-        self.cache.slide_boundary(scene)
+        self.cache.slide_boundary(scene, self.frame())
         self.play(scene, "two", "hash_two")
-        self.cache.slide_boundary(scene)
+        self.cache.slide_boundary(scene, self.frame())
         self.play(scene, "three", "hash_three")
         self.cache.complete(True)
 
@@ -132,9 +136,9 @@ class SelectiveTests(unittest.TestCase):
         self.assertEqual(self.cache.scenes["Deck"]["allow"], 1)
         scene = self.scene()
         self.assertEqual(self.play(scene, "one", "new_one"), "hash_one")
-        self.cache.slide_boundary(scene)
+        self.cache.slide_boundary(scene, self.frame())
         self.assertIsNone(self.play(scene, "TWO", "new_two"))
-        self.cache.slide_boundary(scene)
+        self.cache.slide_boundary(scene, self.frame())
         self.assertIsNone(self.play(scene, "three", "new_three"))
         self.cache.complete(True)
         self.assertEqual(self.cache.scenes["Deck"]["reused"], 1)
@@ -175,9 +179,9 @@ class SelectiveTests(unittest.TestCase):
         self.cache.begin(self.request())
         sc = self.scene()
         self.play(sc, "one", "hash_one")
-        self.cache.slide_boundary(sc)
+        self.cache.slide_boundary(sc, self.frame())
         self.play(sc, "two", "hash_two")
-        self.cache.slide_boundary(sc)
+        self.cache.slide_boundary(sc, self.frame())
         self.play(sc, "three", "hash_three")
         self.cache.complete(False)
         self.assertFalse(list(self.store.glob("*.json")))
@@ -200,8 +204,16 @@ class SelectiveTests(unittest.TestCase):
             mod._SLIDE_CACHE = self.cache
             self.cache.begin(self.request())
             sc = self.scene()
+            # A helper's slide boundary must not be mistaken for an explicit
+            # construct() boundary.
             sc.next_slide()
             self.assertEqual(sc.boundary_calls, 1)
+            self.assertEqual(self.cache.scenes["Deck"]["boundaries"], [0])
+            ns = {}
+            exec(compile("def construct(self): self.next_slide()", str(self.source),
+                         "exec"), ns)
+            ns["construct"](sc)
+            self.assertEqual(sc.boundary_calls, 2)
             self.assertEqual(self.cache.scenes["Deck"]["boundaries"], [0, 0])
         finally:
             mod._SLIDE_CACHE = saved
