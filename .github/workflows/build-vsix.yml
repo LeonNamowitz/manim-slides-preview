@@ -2,7 +2,7 @@ name: Build VSIX
 
 on:
   push:
-    branches: [perf]
+    branches: [perf, perf-v2]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -36,6 +36,18 @@ jobs:
           python -m py_compile /tmp/manim-preview-daemon.py
       - name: Test embedded cached-animation fast path
         run: python tests/test_daemon_perf.py /tmp/manim-preview-daemon.py
+      - name: Validate and test selective slide-cache helper
+        run: |
+          python -m py_compile selective_slide.py
+          python tests/test_selective_slide.py
+          python - <<'PY'
+          import pathlib
+          daemon = pathlib.Path('/tmp/manim-preview-daemon.py').read_text()
+          helper = pathlib.Path('selective_slide.py').read_text()
+          combined = daemon.replace('# SELECTIVE_HELPER_PLACEHOLDER', helper)
+          compile(combined, '<warm-daemon>', 'exec')
+          assert 'class SlidePrefixCache' in combined
+          PY
       - name: Package extension
         run: npm run package
       - name: Verify packaged VSIX
@@ -47,6 +59,8 @@ jobs:
           unzip -p "$vsix" extension/extension.min.js > /tmp/extension-bundle.js
           node --check /tmp/extension-bundle.js
           grep -F '[msp-perf]' /tmp/extension-bundle.js > /dev/null
+          grep -F 'selective_slide.py' /tmp/extension-bundle.js > /dev/null
+          unzip -l "$vsix" | grep 'extension/selective_slide.py'
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
