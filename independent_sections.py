@@ -1,5 +1,5 @@
 
-"""Opt-in independent heading sections; each section is its own Manim Slide scene."""
+"""Opt-in independent heading or explicit marker sections; each is a Manim Slide scene."""
 import ast, hashlib, json, os, re, sys
 from pathlib import Path
 
@@ -12,6 +12,23 @@ def heading(n):
             isinstance(n.value.func,ast.Attribute) and
             n.value.func.attr=="heading" and isinstance(n.value.func.value,ast.Name) and
             n.value.func.value.id=="self")
+def section_marker(n):
+    # Exact self.section() statement, with no arguments, is an explicit
+    # boundary. Unlike heading(), it need not display anything. The caller
+    # must provide a no-op section(self) method in its Scene/Slide subclass
+    # (or base class), so ordinary unsplit renders remain valid too.
+    return (isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and
+            isinstance(n.value.func,ast.Attribute) and
+            n.value.func.attr=="section" and
+            isinstance(n.value.func.value,ast.Name) and
+            n.value.func.value.id=="self" and
+            not n.value.args and not n.value.keywords)
+
+def boundary_call(n):
+    return (isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
+            and n.func.attr in {"heading","section"} and
+            isinstance(n.func.value,ast.Name) and n.func.value.id=="self")
+
 def dependencies(root,source):
     rows=[];size=0
     for folder,dirs,files in os.walk(root):
@@ -35,14 +52,27 @@ def partition(code,scene):
         raise ValueError("construct must be undecorated construct(self)")
     groups=[]
     for node in method.body:
-        if heading(node): groups.append([])
-        if not groups: raise ValueError("construct must start with self.heading(...)")
-        if any(heading(child) for child in ast.walk(node) if child is not node):
-            raise ValueError("nested headings are unsupported")
+        is_boundary = heading(node) or section_marker(node)
+        # A normal heading or an exact bare self.section() starts a section.
+        # Consecutive declarations (e.g. section() followed by heading())
+        # describe ONE section rather than generating an empty extra scene.
+        if is_boundary:
+            if not groups or any(not (heading(n) or section_marker(n)) for n in groups[-1]):
+                groups.append([])
+        elif not groups:
+            raise ValueError("construct must start with self.heading(...) or self.section()")
+        if any(boundary_call(child) for child in ast.walk(node)
+               if isinstance(child,ast.Call) and
+               not (is_boundary and child is node.value)):
+            raise ValueError("nested or invalid section/heading call")
+        if not is_boundary and isinstance(node,ast.Expr) and isinstance(node.value,ast.Call) and boundary_call(node.value):
+            raise ValueError("self.section() takes no arguments")
         if any(isinstance(child,(ast.Yield,ast.YieldFrom,ast.Await,ast.Global,ast.Nonlocal))
                for child in ast.walk(node)): raise ValueError("unsupported control flow")
         groups[-1].append(node)
-    if len(groups)<2: raise ValueError("need at least two heading sections")
+    if len(groups)<2: raise ValueError("need at least two independent sections")
+    if all(section_marker(n) for n in groups[-1]):
+        raise ValueError("trailing self.section() has no content")
     prior=set()
     for group in groups:
         stored={n.id for stmt in group for n in ast.walk(stmt)
