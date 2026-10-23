@@ -39,6 +39,7 @@ const OUT_DIR_NAME = ".manim-slides-preview";
 let EXT_VERSION = "?";
 try { EXT_VERSION = require("./package.json").version; } catch (_) {}
 const CACHE_DIR_NAME = "cache"; // hidden pycache-style store inside OUT_DIR_NAME
+const BUILD_TAG = "perf-v2-cachefix"; // visible in logs to distinguish installed VSIX builds
 
 // Python daemon: imports manim/manim-slides ONCE, then executes render/convert
 // requests in-process — every save skips interpreter startup + imports
@@ -69,6 +70,7 @@ except Exception:
 _CACHE_FAST = {"enabled": True, "profile": False, "hash_ms": 0.0,
                "state_ms": 0.0, "skipped_frames": 0, "skipped_static": 0,
                "skipped_fades": 0}
+print("[msp-build] perf-v2-cachefix", flush=True)
 try:
     import manim.renderer.cairo_renderer as _cairo
     from manim.renderer.cairo_renderer import CairoRenderer as _Cairo
@@ -148,7 +150,7 @@ try:
             self._msp_cached_fades = True
             self.moving_mobjects = []
             self.static_mobjects = []
-            _CACHE_FAST["skipped_fades"] += len(self.animations)
+            _CACHE_FAST["skipped_fades"] = _CACHE_FAST.get("skipped_fades", 0) + len(self.animations)
             return None
         return _original_begin_animations(self)
 
@@ -422,7 +424,7 @@ function openLogStream(previewDir) {
     try { if (fs.existsSync(p) && fs.statSync(p).size > 2 * 1024 * 1024) fs.renameSync(p, p + ".1"); } catch (_) {}
     logStream = fs.createWriteStream(p, { flags: "a" });
     logStreamPath = p;
-    logStream.write(`\n===== session ${new Date().toISOString()} · extension v${EXT_VERSION} · ${process.platform} =====\n`);
+    logStream.write(`\n===== session ${new Date().toISOString()} · extension v${EXT_VERSION} · ${BUILD_TAG} · ${process.platform} =====\n`);
   } catch (_) { logStream = null; logStreamPath = null; }
 }
 
@@ -880,7 +882,7 @@ function ensureDaemon(workDir) {
   d = { child: null, dead: false, readyPromise: null, pending: new Map(), nextId: 1, buf: "" };
   daemons.set(workDir, d);
 
-  log(`\n[daemon] starting: ${py.join(" ")} (cwd: ${workDir})`);
+  log(`\n[daemon] starting: ${py.join(" ")} (cwd: ${workDir}) · build ${BUILD_TAG}`);
   const child = cp.spawn(py[0], [...py.slice(1), "-u", "-c", FINAL_DAEMON_SCRIPT], {
     cwd: workDir,
     env: buildEnv(),
