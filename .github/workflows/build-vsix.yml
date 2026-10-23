@@ -52,6 +52,10 @@ jobs:
         run: |
           python -m py_compile independent_sections.py
           python tests/test_independent_sections.py
+      - name: Verify browser custom converter options are preserved
+        shell: bash
+        run: |
+          grep -F 'convertArgs.push(...(conf.get("extraConvertArgs") || []), ...scenes, htmlPath);' extension.js
       - name: Remove checked-in legacy VSIX files
         run: rm -f -- ./*.vsix
       - name: Package extension
@@ -70,8 +74,8 @@ jobs:
           unzip -l "$vsix" | grep 'extension/selective_slide.py'
           unzip -l "$vsix" | grep 'extension/independent_sections.py'
           unzip -p "$vsix" extension/package.json > /tmp/packaged-extension-package.json
-          node -e 'const p=require("/tmp/packaged-extension-package.json"); if(p.version!=="1.10.0") process.exit(1)'
-          grep -F 'perf-v2-section-markers-v1.10' /tmp/extension-bundle.js > /dev/null
+          node -e 'const p=require("/tmp/packaged-extension-package.json"); if(p.version!=="1.11.0") process.exit(1)'
+          grep -F 'perf-v2-helper-sections-v1.11' /tmp/extension-bundle.js > /dev/null
           grep -F '[msp-build]' /tmp/extension-bundle.js > /dev/null
       - name: Stage only the verified VSIX
         run: |
@@ -81,7 +85,7 @@ jobs:
       - name: Upload VSIX
         uses: actions/upload-artifact@v4
         with:
-          name: manim-slides-preview-v1.10.0-perf-v2
+          name: manim-slides-preview-v1.11.0-perf-v2
           path: dist-vsix/*.vsix
           if-no-files-found: error
           retention-days: 30
