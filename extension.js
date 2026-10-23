@@ -873,6 +873,41 @@ function pythonCmd() {
   return process.platform === "win32" ? ["python"] : ["python3"];
 }
 
+/** Analyze heading-scoped isolated scenes, using the configured Python. */
+async function prepareIndependentSections(filePath, fileDir, rootDir, previewDir, scene, conf) {
+  const opts = [conf.get("quality") || "-ql", conf.get("turboPreview") === true,
+    conf.get("x264Preset") || "", conf.get("extraRenderArgs") || [],
+    conf.get("cacheFastPath") !== false, conf.get("cache") !== false];
+  const py = pythonCmd();
+  const argv = [...py.slice(1), path.join(__dirname, "independent_sections.py"),
+    filePath, rootDir, previewDir, JSON.stringify(opts), scene];
+  return new Promise((resolve) => cp.execFile(py[0], argv, {
+    cwd: fileDir, env: buildEnv(), timeout: 30000, maxBuffer: 1024 * 1024, windowsHide: true,
+  }, (err, stdout, stderr) => {
+    if (err) { log("[sections] planner unavailable: " + err.message); return resolve(null); }
+    let plan;
+    try { plan = JSON.parse(stdout.trim()); } catch (_) {
+      log("[sections] invalid planner output: " + (stderr || stdout).slice(0, 300));
+      return resolve(null);
+    }
+    if (!plan.enabled) {
+      log("[sections] original scene fallback: " + (plan.reason || "unsupported"));
+      return resolve(null);
+    }
+    if (!Array.isArray(plan.scenes) || plan.scenes.length < 2 ||
+        !Array.isArray(plan.dirty) || !Array.isArray(plan.reused) ||
+        !plan.scenes.every((v) => typeof v === "string" && /^\w+$/.test(v)) ||
+        !plan.dirty.every((v) => plan.scenes.includes(v)) ||
+        !path.isAbsolute(plan.source) || !path.isAbsolute(plan.manifest) ||
+        !path.isAbsolute(plan.candidate)) {
+      log("[sections] invalid manifest shape; using original scene");
+      return resolve(null);
+    }
+    log(`[sections] ${plan.scenes.length} isolated · ${plan.dirty.length} rendering · ${plan.reused.length} reused`);
+    resolve(plan);
+  }));
+}
+
 /** Get or start the persistent render daemon for a directory. */
 function ensureDaemon(workDir) {
   let d = daemons.get(workDir);
@@ -1474,8 +1509,9 @@ async function pipeline(filePath, opts = {}) {
       return;
     }
 
-    const scenes = await pickScenes(filePath, !!opts.forcePick);
-    if (!scenes) return;
+    const originalScenes = await pickScenes(filePath, !!opts.forcePick);
+    if (!originalScenes) return;
+    let scenes = originalScenes;
 
     const fileDir = path.dirname(filePath);
     const wsFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
@@ -1516,6 +1552,12 @@ async function pipeline(filePath, opts = {}) {
     // Turbo preview: lower res/fps + skip reversed-video generation.
     // Final quality is untouched — flip the setting (or use -qh) when needed.
     const turbo = conf.get("turboPreview") === true;
+    let sectionPlan = null;
+    if (conf.get("independentSections") === true && useCache && originalScenes.length === 1) {
+      sectionPlan = await prepareIndependentSections(
+        filePath, fileDir, rootDir, previewDir, originalScenes[0], conf);
+      if (sectionPlan) scenes = sectionPlan.scenes;
+    }
     // Source-level skip: if the scene file (and its .py siblings) plus every
     // render-relevant setting are bit-identical to the last SUCCESSFUL render,
     // don't invoke manim at all. This is the only reliable no-op-save guard:
@@ -1525,7 +1567,10 @@ async function pipeline(filePath, opts = {}) {
     const prevSt = fileState.get(filePath) || {};
     const srcKey = useCache ? sourceKey(filePath, scenes, conf) : null;
     const slidesExist = () => scenes.every((sc) => fs.existsSync(path.join(fileDir, "slides", `${sc}.json`)));
-    const skipRender = !!(srcKey && prevSt.srcKey === srcKey && slidesExist());
+    const skipRender = !!(
+      (srcKey && prevSt.srcKey === srcKey && slidesExist()) ||
+      (sectionPlan && sectionPlan.dirty.length === 0)
+    );
     if (!skipRender) {
       setStatus(`Rendering ${scenes.join(", ")}…`, filePath, true);
       // Always show progress in the Output panel (not just the status bar):
@@ -1542,7 +1587,8 @@ async function pipeline(filePath, opts = {}) {
       setStatus("Up to date ✓", "Source unchanged since last render", false);
     } else {
     const renderArgs = [
-      "render", filePath, ...scenes,
+      "render", sectionPlan ? sectionPlan.source : filePath,
+      ...(sectionPlan ? sectionPlan.dirty : scenes),
       conf.get("quality") || "-ql",
       "--media_dir", cacheMediaDir, // partial caches live in .manim-slides-preview/cache/
       ...(turbo ? ["-r", "640,360", "--fps", "15"] : []),
@@ -1555,7 +1601,7 @@ async function pipeline(filePath, opts = {}) {
     // Independent success check: manim's in-process CLI can misreport rc after
     // an earlier failure, so we verify the slide configs were actually (re)written.
     const renderStart = Date.now();
-    const slidesFresh = () => scenes.every((s) => {
+    const slidesFresh = () => (sectionPlan ? sectionPlan.dirty : scenes).every((s) => {
       try {
         const st = fs.statSync(path.join(fileDir, "slides", `${s}.json`));
         return st.mtimeMs >= renderStart - 2000;
@@ -1571,7 +1617,7 @@ async function pipeline(filePath, opts = {}) {
         x264_preset: turbo ? "ultrafast" : (conf.get("x264Preset") || null),
         cache_fast_path: conf.get("cacheFastPath") !== false,
         profile_cache_hits: conf.get("profileCacheHits") === true,
-        selective_slides: useCache && conf.get("selectiveSlides") === true && conf.get("cacheFastPath") !== false,
+        selective_slides: !sectionPlan && useCache && conf.get("selectiveSlides") === true && conf.get("cacheFastPath") !== false,
         selective_root: rootDir,
         selective_store: path.join(previewDir, CACHE_DIR_NAME, "slide-manifests"),
       });
@@ -1585,7 +1631,7 @@ async function pipeline(filePath, opts = {}) {
           x264_preset: turbo ? "ultrafast" : (conf.get("x264Preset") || null),
           cache_fast_path: conf.get("cacheFastPath") !== false,
           profile_cache_hits: conf.get("profileCacheHits") === true,
-          selective_slides: useCache && conf.get("selectiveSlides") === true && conf.get("cacheFastPath") !== false,
+          selective_slides: !sectionPlan && useCache && conf.get("selectiveSlides") === true && conf.get("cacheFastPath") !== false,
           selective_root: rootDir,
           selective_store: path.join(previewDir, CACHE_DIR_NAME, "slide-manifests"),
         });
@@ -1622,6 +1668,15 @@ async function pipeline(filePath, opts = {}) {
         "manim-slides render failed — see the 'Manim Slides Preview' output log." + lp
       );
       return;
+    }
+
+    if (sectionPlan) {
+      try {
+        fs.renameSync(sectionPlan.candidate, sectionPlan.manifest);
+        log(`[sections] saved ${sectionPlan.scenes.length} section fingerprints`);
+      } catch (e) {
+        log("[sections] manifest commit failed: " + e.message);
+      }
     }
 
     // ---- 2) CONVERT to interactive HTML (skipped when nothing changed) ----
@@ -1668,6 +1723,8 @@ async function pipeline(filePath, opts = {}) {
     // ---- 3) SERVE + OPEN / REFRESH ----------------------------------------
     const st = fileState.get(filePath) || {};
     st.scenes = scenes;
+    st.originalScenes = originalScenes;
+    st.independentSections = !!sectionPlan;
     st.previewDir = previewDir;
     st.htmlName = htmlName;
     st.fileDir = fileDir;
@@ -1831,10 +1888,11 @@ function activate(context) {
     vscode.commands.registerCommand("manimSlidesPreview.presentGui", async () => {
       const doc = activePyFile();
       if (!doc) return;
-      const scenes = await pickScenes(doc.uri.fsPath, false);
+      const st = fileState.get(doc.uri.fsPath);
+      const scenes = st && st.independentSections ? st.scenes
+        : await pickScenes(doc.uri.fsPath, false);
       if (!scenes) return;
       launchGui(doc.uri.fsPath, path.dirname(doc.uri.fsPath), scenes, cfg());
-      const st = fileState.get(doc.uri.fsPath);
       if (st) st.guiLaunched = true;
     }),
 
