@@ -97,6 +97,13 @@ class CacheFastTest(unittest.TestCase):
             self.assertEqual(self.ns["_measure_play"](self.renderer), "played")
         self.assertIn("fast_fades=1", output.getvalue())
 
+    def test_cached_fade_without_counter_key(self):
+        # Mimics a partially stale daemon state; never crash inside
+        # begin_animations even when the profiling counter is missing.
+        del self.ns["_CACHE_FAST"]["skipped_fades"]
+        self.ns["_begin_cached_fades"](self.scene)
+        self.assertEqual(self.ns["_CACHE_FAST"]["skipped_fades"], 1)
+
     def test_fallback_when_fast_path_disabled(self):
         self.ns["_CACHE_FAST"]["enabled"] = False
         self.assertEqual(self.ns["_measure_play"](self.renderer), "played")
