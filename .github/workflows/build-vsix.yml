@@ -34,6 +34,8 @@ jobs:
         run: |
           node -e 'const fs=require("fs"); const s=fs.readFileSync("extension.js","utf8"); const m=s.match(/const DAEMON_SCRIPT = `([\s\S]*?)`;/); if(!m)process.exit(1); fs.writeFileSync("/tmp/manim-preview-daemon.py", m[1]);'
           python -m py_compile /tmp/manim-preview-daemon.py
+      - name: Test embedded cached-animation fast path
+        run: python tests/test_daemon_perf.py /tmp/manim-preview-daemon.py
       - name: Package extension
         run: npm run package
       - name: Verify packaged VSIX
