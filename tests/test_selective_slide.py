@@ -61,10 +61,14 @@ FakeMobject = type("Text", (), {
     "__str__": lambda self: self.value,
     "__init__": lambda self, value: setattr(self, "value", value)
 })
+def _init_animation(self, mob):
+    self.mobject = mob
+    self.run_time = 1.0
+
+
 FakeAnimation = type("Write", (), {
     "__module__": "manim.animation.creation",
-    "__init__": lambda self, mob: (
-        setattr(self, "mobject", mob), setattr(self, "run_time", 1.0)),
+    "__init__": _init_animation,
 })
 
 
