@@ -247,6 +247,25 @@ After a **successful first render**, the daemon records a compact slide manifest
 
 The `Build VSIX` GitHub Action runs on pushes to `perf` and `perf-v2` (or via **Run workflow**). It tests JS syntax, Python syntax, slide-prefix regression cases, and VSIX packaging. It does not execute a graphical Manim integration render.
 
+### Independently renderable sections (perf-v2 v1.9; opt-in)
+
+This mode makes actual **separate Manim Slides scenes** from every top-level `self.heading(...)` block in an existing `construct(self)` method. Unlike partial-video caching, **unchanged sections are not executed**. Their existing slide JSON and videos are reused directly, even if you edit a section near the beginning of the presentation. All sections are assembled in order by the normal Manim Slides converter/presenter. This is particularly useful for the `WeekOne11(LessonSlide)` pattern with several independent headings.
+
+Enable it in VS Code `settings.json`:
+
+```json
+{
+  "manimSlidesPreview.independentSections": true,
+  "manimSlidesPreview.profileCacheHits": false
+}
+```
+
+**Behavioral difference:** scene transitions **between heading sections are hard cuts**, rather than `FadeOut` of the previous section's mobjects. Transitions and pauses **within** a section remain unchanged. The original Python file is not modified; the extension writes generated scene code and a small manifest inside `.manim-slides-preview/cache/independent-sections/`. On the first render, all sections render independently. After that, only sections whose code or dependencies changed render again.
+
+**Safety constraints:** Each section must be self-contained, beginning with `self.heading(...)`. The planner rejects cross-section references to variables defined in earlier sections, nested headings, direct `self` attribute assignments, and unsupported control flow. It detects changes to global code, project Python files, render quality/settings, missing slide videos, and deleted configurations; unsupported layouts fall back to normal whole-scene rendering. This feature is **opt-in**, because Python may depend on external data, randomness, time, or side effects not visible in static source analysis. If your sections intentionally depend on each other's state, leave the mode disabled. The existing single-scene export video is replaced by separate per-section videos.
+
+Source-level selective hash reuse (`selectiveSlides`) is a separate experimental feature. Independent section mode takes precedence when active; you do not need both.
+
 ## 9. Commands
 
 Open the palette with `Ctrl+Shift+P`:
