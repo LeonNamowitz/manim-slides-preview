@@ -239,7 +239,8 @@ class SlidePrefixCache:
                         prefix = 0
                     prefix = min(prefix, len(old["hashes"]))
             self.scenes[name] = {
-                "path": manifest_path, "layout": layout, "settings": settings,
+                "path": manifest_path, "source_file": source_file,
+                "layout": layout, "settings": settings,
                 "old": old, "allow": prefix, "hashes": [], "signatures": [],
                 "pending": {}, "boundaries": [0], "reused": 0,
                 "failed": False,
@@ -297,10 +298,20 @@ class SlidePrefixCache:
         state["hashes"].append(hashes[-1])
         state["signatures"].append(state["pending"].pop(prior_index, None))
 
-    def slide_boundary(self, scene):
+    def slide_boundary(self, scene, caller_frame):
         state = self._state(scene)
-        if state is not None:
-            state["boundaries"].append(scene.renderer.num_plays)
+        if state is None:
+            return
+        # Helper routines (reveal/chart/finish_slide) can call next_slide()
+        # dozens of times. The parser uses ONLY explicit next_slide() calls
+        # inside construct(), so checkpoints must use the same definition.
+        try:
+            if (caller_frame.f_code.co_name == "construct"
+                    and Path(caller_frame.f_code.co_filename).resolve()
+                    == state["source_file"]):
+                state["boundaries"].append(scene.renderer.num_plays)
+        except (OSError, ValueError):
+            pass
 
     def complete(self, success):
         if not self.active:
@@ -350,7 +361,7 @@ try:
     @_wraps(_original_slide_boundary)
     def _selective_next_slide(self, *args, **kwargs):
         result = _original_slide_boundary(self, *args, **kwargs)
-        _SLIDE_CACHE.slide_boundary(self)
+        _SLIDE_CACHE.slide_boundary(self, sys._getframe(1))
         return result
 
     _ManimSlide.next_slide = _selective_next_slide
