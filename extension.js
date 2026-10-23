@@ -67,7 +67,8 @@ except Exception:
 # The patch applies only to the warm in-process renderer, and can be disabled
 # independently of Manim's actual partial-movie cache.
 _CACHE_FAST = {"enabled": True, "profile": False, "hash_ms": 0.0,
-               "state_ms": 0.0, "skipped_frames": 0, "skipped_static": 0}
+               "state_ms": 0.0, "skipped_frames": 0, "skipped_static": 0,
+               "skipped_fades": 0}
 try:
     import manim.renderer.cairo_renderer as _cairo
     from manim.renderer.cairo_renderer import CairoRenderer as _Cairo
@@ -201,6 +202,8 @@ try:
             _CACHE_FAST["state_ms"] += (_clock() - t) * 1000
 
     def _measure_play(self, *args, **kwargs):
+        # Counter must exist even with profiling disabled (the default).
+        _CACHE_FAST["skipped_fades"] = 0
         if not _CACHE_FAST["profile"]:
             return _original_cairo_play(self, *args, **kwargs)
         idx = self.num_plays
