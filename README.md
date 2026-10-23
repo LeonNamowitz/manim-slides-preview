@@ -247,9 +247,9 @@ After a **successful first render**, the daemon records a compact slide manifest
 
 The `Build VSIX` GitHub Action runs on pushes to `perf` and `perf-v2` (or via **Run workflow**). It tests JS syntax, Python syntax, slide-prefix regression cases, and VSIX packaging. It does not execute a graphical Manim integration render.
 
-### Independently renderable sections (perf-v2 v1.9; opt-in)
+### Independently renderable sections (perf-v2 v1.11; opt-in)
 
-This mode makes actual **separate Manim Slides scenes** from every top-level `self.heading(...)` **or** `self.section()` call in an existing `construct(self)` method. Unlike partial-video caching, **unchanged sections are not executed**. Their existing slide JSON and videos are reused directly, even if you edit a section near the beginning of the presentation. All sections are assembled in order by the normal Manim Slides converter/presenter. This is particularly useful for the `WeekOne11(LessonSlide)` pattern with several independent headings.
+This mode makes actual **separate Manim Slides scenes** from every top-level `self.heading(...)` or `self.section()` call in `construct(self)`, **or** from a sequence of argument-free `self.show_*()` calls. For helper-method decks, each referenced method must be defined in the same class and start with `self.heading(...)`. Unlike partial-video caching, **unchanged sections are not executed**. Their existing slide JSON and videos are reused directly, even if you edit a section near the beginning of the presentation. All sections are assembled in order by the normal Manim Slides converter/presenter. This is particularly useful for the `WeekOne11(LessonSlide)` pattern with several independent headings.
 
 Enable it in VS Code `settings.json`:
 
@@ -282,9 +282,37 @@ class MyDeck(Slide):
 
 Both boundaries can coexist in one deck: a top-level `self.heading("Topic")` still creates a titled section, while a top-level `self.section()` creates an untitled section. Consecutive boundary declarations are combined rather than producing an empty section. **This is a user-defined no-op method, not a Manim API.** Defining it ensures the same source also runs when `independentSections` is turned off. Calls with arguments and nested boundary calls are unsupported; the planner falls back to whole-scene rendering.
 
+Helper-method decks now work without moving heading calls into `construct()` or adding `finish_slide()`:
+
+```python
+class Week_1(LessonSlide):
+    def construct(self):
+        self.show_info()
+        self.show_criteria()
+        self.show_submissions()
+
+    def show_info(self):
+        self.heading("Infos")
+        info = self.bullet_column(["Welcome", "Schedule"])
+        self.next_slide()
+        self.reveal(*info)
+
+    def show_criteria(self):
+        self.heading("Scheinkriterien")
+        self.reveal(*self.bullet_column(["Attendance", "Homework"]))
+
+    def show_submissions(self):
+        self.heading("Abgaben")
+        self.reveal(*self.bullet_column(["PDF submission"]))
+```
+
+Each `self.show_*()` call becomes an independent scene, in source order. The generated section calls the **original bound method**, so `reveal()` keeps its `next_slide()` pauses and `finish_slide()` is not necessary. Method bodies are fingerprinted separately from shared code: changing only `show_criteria()` renders that section, while changing an imported module, global variable, or shared helper conservatively invalidates all sections. Mixed inline headings and helper calls in the same `construct()`, calls with arguments, missing methods, methods without an initial heading, and detected cross-section state mutations trigger a logged fallback.
+
+Logs distinguish `[sections] ACTIVE mode=helper-methods` or `mode=inline` from `[sections] FALLBACK to original scene: <reason>`. If independent mode falls back, `selectiveSlides` may still apply where supported. Custom Reveal.js templates passed through `manimSlidesPreview.extraConvertArgs` are not modified.
+
 **Behavioral difference:** scene transitions **between heading sections are hard cuts**, rather than `FadeOut` of the previous section's mobjects. Transitions and pauses **within** a section remain unchanged. The original Python file is not modified; the extension writes generated scene code and a small manifest inside `.manim-slides-preview/cache/independent-sections/`. On the first render, all sections render independently. After that, only sections whose code or dependencies changed render again.
 
-**Safety constraints:** Each section must be self-contained, beginning with `self.heading(...)`. The planner rejects cross-section references to variables defined in earlier sections, nested headings, direct `self` attribute assignments, and unsupported control flow. It detects changes to global code, project Python files, render quality/settings, missing slide videos, and deleted configurations; unsupported layouts fall back to normal whole-scene rendering. This feature is **opt-in**, because Python may depend on external data, randomness, time, or side effects not visible in static source analysis. If your sections intentionally depend on each other's state, leave the mode disabled. The existing single-scene export video is replaced by separate per-section videos.
+**Safety constraints:** Each section must be self-contained. Helper methods must start with `self.heading(...)`; inline sections can instead start with `self.section()`. The planner rejects cross-section references to variables defined in earlier sections, nested headings, direct `self` attribute assignments, and unsupported control flow. It detects changes to global code, project Python files, render quality/settings, missing slide videos, and deleted configurations; unsupported layouts fall back to normal whole-scene rendering. This feature is **opt-in**, because Python may depend on external data, randomness, time, or side effects not visible in static source analysis. If your sections intentionally depend on each other's state, leave the mode disabled. The existing single-scene export video is replaced by separate per-section videos.
 
 Source-level selective hash reuse (`selectiveSlides`) is a separate experimental feature. Independent section mode takes precedence when active; you do not need both.
 
