@@ -71,6 +71,9 @@ def _source_layout(source, scene_name):
     blocks, current = [], []
     for stmt in construct.body:
         if _is_next_slide(stmt):
+            # Include the boundary call itself: loop/skip/auto_next options
+            # can change slide behavior and must invalidate old checkpoints.
+            current.append(stmt)
             blocks.append(_digest(ast.dump(ast.Module(body=current, type_ignores=[]),
                                            include_attributes=False)))
             current = []
