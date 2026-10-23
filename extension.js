@@ -1654,7 +1654,7 @@ async function pipeline(filePath, opts = {}) {
       // that manim's cache would reuse — discard anything written in the
       // last seconds of the doomed render, then let finally{} start the
       // queued newer save immediately. No error popups: this is a feature.
-      pruneTruncatedPartials(previewDir, base, Date.now() - 15000);
+      pruneTruncatedPartials(previewDir, sectionPlan ? path.basename(sectionPlan.source, ".py") : base, Date.now() - 15000);
       log("[restart] stale render stopped — starting the new one now");
       return;
     }
