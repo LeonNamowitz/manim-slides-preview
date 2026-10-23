@@ -297,6 +297,11 @@
           "type": "boolean",
           "default": false,
           "description": "Print per-animation timing to .manim-slides-preview/msp.log: total, hash, state simulation, other overhead, and avoided Cairo frames. Enable temporarily when diagnosing slow cached animations. Requires the render daemon."
+        },
+        "manimSlidesPreview.selectiveSlides": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reuse animation hashes and partial videos from unchanged slide prefixes when a supported deterministic Slide.construct has explicit self.next_slide() boundaries. Changed slides and later slides render normally. Python still executes earlier slide code to preserve state. Falls back automatically on unsupported layouts, dependency changes or animation mismatches; disable for scripts using random/time/external data."
         }
       }
     }
