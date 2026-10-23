@@ -2,7 +2,7 @@
   "name": "manim-slides-preview",
   "displayName": "Manim Slides Preview",
   "description": "Render manim-slides scenes, auto-convert them to interactive offline HTML, and live-preview them inside VS Code or any browser. Zero dependencies, fully offline.",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "publisher": "local-tools",
   "author": {
     "name": "Alamin Maruf",
@@ -306,7 +306,7 @@
         "manimSlidesPreview.independentSections": {
           "type": "boolean",
           "default": false,
-          "description": "EXPERIMENTAL opt-in: compile top-level self.heading(...) blocks into independent Manim Slide scenes; render only changed sections, reuse all other slide videos. Cross-section fade transitions become hard cuts. Unsupported constructs/cross-section local variables fall back to normal rendering. Use only for deterministic independent sections."
+          "description": "EXPERIMENTAL: turn top-level self.heading(...) and self.section() calls into independently renderable scenes. self.section() needs a no-op method on the scene class to remain compatible with normal unsplit renders. Render changed sections only, reuse others. Cross-section transitions become hard cuts; unsupported source falls back."
         }
       }
     }
