@@ -39,6 +39,16 @@ class Deck(Slide):
         self.reveal(CONSTANT)
 '''
 
+# The marker is a no-op in ordinary Manim rendering as well. It remains a
+# Python method, and the independent section renderer recognizes its call.
+MARKER_DECK = (
+    DECK.replace('    def construct(self):\n',
+                 '    def section(self):\n        pass\n    def construct(self):\n')
+        .replace('self.heading("first")', 'self.section()')
+        .replace('self.heading("second")', 'self.section()')
+        .replace('self.heading("third")', 'self.section()')
+)
+
 
 class IndependentTests(unittest.TestCase):
     def setUp(self):
@@ -121,6 +131,73 @@ class IndependentTests(unittest.TestCase):
         self.commit(first)
         self.settings[0] = "-qh"
         self.assertEqual(len(self.plan()["dirty"]), 3)
+
+    def test_section_only_deck_without_headings(self):
+        self.source.write_text(MARKER_DECK, encoding="utf-8")
+        p = self.plan()
+        self.assertEqual(len(p["scenes"]), 3)
+        namespace = {"__name__": "msp_marker_wrapper"}
+        exec(compile(Path(p["source"]).read_text(), p["source"], "exec"), namespace)
+        first = namespace[p["scenes"][0]]()
+        second = namespace[p["scenes"][1]]()
+        third = namespace[p["scenes"][2]]()
+        for scene in (first, second, third):
+            scene.construct()
+        self.assertEqual(first.events, ["play alpha", "pause"])
+        self.assertEqual(second.events, ["play beta", "pause"])
+        self.assertEqual(third.events, ["play constant", "pause"])
+        self.commit(p)
+        self.assertEqual(self.plan()["dirty"], [])
+        self.source.write_text(MARKER_DECK.replace('"alpha"', '"ALPHA"'), encoding="utf-8")
+        changed = self.plan()
+        self.assertEqual(changed["dirty"], [p["scenes"][0]])
+        self.assertEqual(changed["reused"], p["scenes"][1:])
+
+    def test_mixed_headings_and_section_markers(self):
+        mixed = DECK.replace("    def construct(self):\n",
+                             "    def section(self):\n        pass\n    def construct(self):\n")
+        mixed = mixed.replace('self.heading("second")', 'self.section()')
+        self.source.write_text(mixed, encoding="utf-8")
+        p = self.plan()
+        self.assertEqual(len(p["scenes"]), 3)
+        namespace = {"__name__": "msp_mixed_wrapper"}
+        exec(compile(Path(p["source"]).read_text(), p["source"], "exec"), namespace)
+        middle = namespace[p["scenes"][1]]()
+        middle.construct()
+        self.assertEqual(middle.events, ["play beta", "pause"])
+        self.commit(p)
+        self.source.write_text(mixed.replace('"beta"', '"BETA"'), encoding="utf-8")
+        self.assertEqual(self.plan()["dirty"], [p["scenes"][1]])
+
+    def test_adjacent_section_marker_and_heading_are_one_section(self):
+        mixed = DECK.replace("    def construct(self):\n",
+                             "    def section(self):\n        pass\n    def construct(self):\n")
+        mixed = mixed.replace('self.heading("second")',
+                              'self.section()\n        self.heading("second")')
+        self.source.write_text(mixed, encoding="utf-8")
+        p = self.plan()
+        self.assertEqual(len(p["scenes"]), 3)
+        namespace = {"__name__": "msp_adjacent_wrapper"}
+        exec(compile(Path(p["source"]).read_text(), p["source"], "exec"), namespace)
+        second = namespace[p["scenes"][1]]()
+        second.construct()
+        self.assertEqual(second.events, ["heading second", "play beta", "pause"])
+
+    def test_invalid_marker_arguments_rejected(self):
+        code = MARKER_DECK.replace('self.section()', 'self.section("name")', 1)
+        with self.assertRaises(ValueError):
+            sec.partition(code, "Deck")
+
+    def test_nested_marker_rejected(self):
+        code = MARKER_DECK.replace('        self.section()\n',
+                                   '        if True:\n            self.section()\n', 1)
+        with self.assertRaises(ValueError):
+            sec.partition(code, "Deck")
+
+    def test_trailing_empty_section_rejected(self):
+        code = MARKER_DECK.rstrip() + "\n        self.section()\n"
+        with self.assertRaisesRegex(ValueError, "trailing"):
+            sec.partition(code, "Deck")
 
     def test_cross_section_local_rejected(self):
         code = DECK.replace('second_local = "beta"', 'second_local = first_local')
