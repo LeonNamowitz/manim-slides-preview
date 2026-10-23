@@ -1569,7 +1569,7 @@ async function pipeline(filePath, opts = {}) {
         x264_preset: turbo ? "ultrafast" : (conf.get("x264Preset") || null),
         cache_fast_path: conf.get("cacheFastPath") !== false,
         profile_cache_hits: conf.get("profileCacheHits") === true,
-        selective_slides: useCache && conf.get("selectiveSlides") !== false && conf.get("cacheFastPath") !== false,
+        selective_slides: useCache && conf.get("selectiveSlides") === true && conf.get("cacheFastPath") !== false,
         selective_root: rootDir,
         selective_store: path.join(previewDir, CACHE_DIR_NAME, "slide-manifests"),
       });
@@ -1583,7 +1583,7 @@ async function pipeline(filePath, opts = {}) {
           x264_preset: turbo ? "ultrafast" : (conf.get("x264Preset") || null),
           cache_fast_path: conf.get("cacheFastPath") !== false,
           profile_cache_hits: conf.get("profileCacheHits") === true,
-          selective_slides: useCache && conf.get("selectiveSlides") !== false && conf.get("cacheFastPath") !== false,
+          selective_slides: useCache && conf.get("selectiveSlides") === true && conf.get("cacheFastPath") !== false,
           selective_root: rootDir,
           selective_store: path.join(previewDir, CACHE_DIR_NAME, "slide-manifests"),
         });
