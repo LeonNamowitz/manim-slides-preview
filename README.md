@@ -249,7 +249,7 @@ The `Build VSIX` GitHub Action runs on pushes to `perf` and `perf-v2` (or via **
 
 ### Independently renderable sections (perf-v2 v1.9; opt-in)
 
-This mode makes actual **separate Manim Slides scenes** from every top-level `self.heading(...)` block in an existing `construct(self)` method. Unlike partial-video caching, **unchanged sections are not executed**. Their existing slide JSON and videos are reused directly, even if you edit a section near the beginning of the presentation. All sections are assembled in order by the normal Manim Slides converter/presenter. This is particularly useful for the `WeekOne11(LessonSlide)` pattern with several independent headings.
+This mode makes actual **separate Manim Slides scenes** from every top-level `self.heading(...)` **or** `self.section()` call in an existing `construct(self)` method. Unlike partial-video caching, **unchanged sections are not executed**. Their existing slide JSON and videos are reused directly, even if you edit a section near the beginning of the presentation. All sections are assembled in order by the normal Manim Slides converter/presenter. This is particularly useful for the `WeekOne11(LessonSlide)` pattern with several independent headings.
 
 Enable it in VS Code `settings.json`:
 
@@ -259,6 +259,28 @@ Enable it in VS Code `settings.json`:
   "manimSlidesPreview.profileCacheHits": false
 }
 ```
+
+To create independent sections **without visible headings**, define a no-op marker once in your deck class (or shared base class) and call it at the start of each section:
+
+```python
+from manim import *
+from manim_slides import Slide
+
+class MyDeck(Slide):
+    def section(self):
+        pass  # Marker only; needed for normal Manim renders too
+
+    def construct(self):
+        self.section()
+        self.play(Write(Text("Introduction")))
+        self.next_slide()
+
+        self.section()
+        self.play(Write(Text("Example")))
+        self.next_slide()
+```
+
+Both boundaries can coexist in one deck: a top-level `self.heading("Topic")` still creates a titled section, while a top-level `self.section()` creates an untitled section. Consecutive boundary declarations are combined rather than producing an empty section. **This is a user-defined no-op method, not a Manim API.** Defining it ensures the same source also runs when `independentSections` is turned off. Calls with arguments and nested boundary calls are unsupported; the planner falls back to whole-scene rendering.
 
 **Behavioral difference:** scene transitions **between heading sections are hard cuts**, rather than `FadeOut` of the previous section's mobjects. Transitions and pauses **within** a section remain unchanged. The original Python file is not modified; the extension writes generated scene code and a small manifest inside `.manim-slides-preview/cache/independent-sections/`. On the first render, all sections render independently. After that, only sections whose code or dependencies changed render again.
 
