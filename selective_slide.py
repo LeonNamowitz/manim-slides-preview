@@ -182,7 +182,7 @@ class SlidePrefixCache:
                   flush=True)
             return
         try:
-            source = source_file.read_text(encoding="utf-8")
+            source = source_file.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeError):
             return
         render_params = [str(value) for value in args[3:]]
