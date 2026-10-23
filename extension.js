@@ -81,6 +81,64 @@ try:
     _original_hash_play = _cairo.get_hash_from_play_call
     _original_play_internal = _Scene.play_internal
 
+    # Safe cross-play reuse: the source text of an existing Python code object
+    # cannot change. Manim's hash encoder calls inspect.getsource for closure
+    # functions (such as animation paths/updaters) again at every play. Cache
+    # only that immutable source string, NOT closure values or mutable mobjects.
+    # Keep normal Manim hashing, including all live object data, unchanged.
+    import manim.utils.hashing as _hashing
+    import inspect as _stdlib_inspect
+    from functools import lru_cache as _lru_cache
+    from manim.animation.fading import FadeOut as _FadeOut
+
+    @_lru_cache(maxsize=2048)
+    def _cached_code_source(code):
+        return _stdlib_inspect.getsource(code)
+
+    class _HashInspectProxy:
+        def __getattr__(self, name):
+            return getattr(_stdlib_inspect, name)
+        def getsource(self, obj):
+            code = getattr(obj, "__code__", None)
+            if code is not None:
+                return _cached_code_source(code)
+            return _stdlib_inspect.getsource(obj)
+
+    # Only the hashing module sees this wrapper; do not alter global inspect.
+    _hashing.inspect = _HashInspectProxy()
+
+    _original_begin_animations = _Scene.begin_animations
+
+    def _simple_cached_fades(scene):
+        # A FadeOut removes its mobject, then restores the original appearance
+        # in clean_up_from_scene. For plain FadeOut with no updaters, directly
+        # removing the unchanged object has the same observable final state,
+        # without 3 full copies, target alignment, and interpolation.
+        # Mixed/custom animations and updater-bearing objects use Manim's
+        # original path. Never short-circuit non-cached plays.
+        if not scene.animations or scene.stop_condition is not None:
+            return False
+        if not all(type(anim) is _FadeOut for anim in scene.animations):
+            return False
+        for anim in scene.animations:
+            mob = anim.mobject
+            if mob is None or not anim.suspend_mobject_updating:
+                return False
+            if any(part.updaters for part in mob.get_family()):
+                return False
+        return True
+
+    def _begin_cached_fades(self):
+        self._msp_cached_fades = False
+        if (_CACHE_FAST["enabled"] and self.renderer.skip_animations
+                and _simple_cached_fades(self)):
+            self._msp_cached_fades = True
+            self.moving_mobjects = []
+            self.static_mobjects = []
+            _CACHE_FAST["skipped_fades"] += len(self.animations)
+            return None
+        return _original_begin_animations(self)
+
     def _cache_render_frame(self, *args, **kwargs):
         if _CACHE_FAST["enabled"] and self.skip_animations:
             _CACHE_FAST["skipped_frames"] += 1
@@ -111,6 +169,17 @@ try:
             _CACHE_FAST["hash_ms"] += (_clock() - t) * 1000
 
     def _measure_state(self, *args, **kwargs):
+        if getattr(self, "_msp_cached_fades", False):
+            # Called after cache-key generation and partial-file registration.
+            # FadeOut's ordinary cleanup removes and then restores originals;
+            # removing the untouched originals produces the same scene state.
+            t = _clock()
+            for animation in self.animations:
+                self.remove(animation.mobject)
+            self.renderer.static_image = None
+            if _CACHE_FAST["profile"]:
+                _CACHE_FAST["state_ms"] += (_clock() - t) * 1000
+            return None
         if not _CACHE_FAST["profile"]:
             return _original_play_internal(self, *args, **kwargs)
         t = _clock()
@@ -127,6 +196,8 @@ try:
         _CACHE_FAST["state_ms"] = 0.0
         _CACHE_FAST["skipped_frames"] = 0
         _CACHE_FAST["skipped_static"] = 0
+        _CACHE_FAST["skipped_fades"] = 0
+        source_before = _cached_code_source.cache_info()
         t = _clock()
         try:
             return _original_cairo_play(self, *args, **kwargs)
@@ -135,11 +206,15 @@ try:
             hash_ms = _CACHE_FAST["hash_ms"]
             state_ms = _CACHE_FAST["state_ms"]
             other_ms = max(0.0, total - hash_ms - state_ms)
+            source_after = _cached_code_source.cache_info()
             print("[msp-perf] anim={} skipped={} total={:.1f}ms hash={:.1f}ms "
-                  "state={:.1f}ms other={:.1f}ms bypassed_frames={} bypassed_static={}".format(
+                  "state={:.1f}ms other={:.1f}ms bypassed_frames={} bypassed_static={} "
+                  "fast_fades={} source_cache_hits={} source_cache_misses={}".format(
                       idx, bool(self.skip_animations), total, hash_ms, state_ms,
                       other_ms, _CACHE_FAST["skipped_frames"],
-                      _CACHE_FAST["skipped_static"]), flush=True)
+                      _CACHE_FAST["skipped_static"], _CACHE_FAST["skipped_fades"],
+                      source_after.hits - source_before.hits,
+                      source_after.misses - source_before.misses), flush=True)
 
     _Cairo.render = _cache_render_frame
     _Cairo.save_static_frame_data = _cache_static_frame
@@ -147,6 +222,7 @@ try:
     _Cairo.play = _measure_play
     _cairo.get_hash_from_play_call = _measure_hash
     _Scene.play_internal = _measure_state
+    _Scene.begin_animations = _begin_cached_fades
 except Exception as e:
     print("[msp-perf] Cairo optimization unavailable: " + str(e)[:240], flush=True)
 
@@ -270,6 +346,8 @@ while True:
     _PRESET["value"] = req.get("x264_preset") or None
     _CACHE_FAST["enabled"] = bool(req.get("cache_fast_path", True))
     _CACHE_FAST["profile"] = bool(req.get("profile_cache_hits", False))
+    if "_cached_code_source" in globals():
+        _cached_code_source.cache_clear()  # fresh request: changed source files
     t = time.time()
     if faulthandler:
         try: faulthandler.dump_traceback_later(300, repeat=True, exit=False)
