@@ -1567,10 +1567,9 @@ async function pipeline(filePath, opts = {}) {
     const prevSt = fileState.get(filePath) || {};
     const srcKey = useCache ? sourceKey(filePath, scenes, conf) : null;
     const slidesExist = () => scenes.every((sc) => fs.existsSync(path.join(fileDir, "slides", `${sc}.json`)));
-    const skipRender = !!(
-      (srcKey && prevSt.srcKey === srcKey && slidesExist()) ||
-      (sectionPlan && sectionPlan.dirty.length === 0)
-    );
+    const skipRender = sectionPlan
+      ? sectionPlan.dirty.length === 0
+      : !!(srcKey && prevSt.srcKey === srcKey && slidesExist());
     if (!skipRender) {
       setStatus(`Rendering ${scenes.join(", ")}…`, filePath, true);
       // Always show progress in the Output panel (not just the status bar):
