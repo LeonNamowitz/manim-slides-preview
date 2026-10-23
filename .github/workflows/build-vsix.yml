@@ -71,7 +71,7 @@ jobs:
           unzip -l "$vsix" | grep 'extension/independent_sections.py'
           unzip -p "$vsix" extension/package.json > /tmp/packaged-extension-package.json
           node -e 'const p=require("/tmp/packaged-extension-package.json"); if(p.version!=="1.9.0") process.exit(1)'
-          grep -F 'perf-v2-cachefix' /tmp/extension-bundle.js > /dev/null
+          grep -F 'perf-v2-independent-v1.9' /tmp/extension-bundle.js > /dev/null
           grep -F '[msp-build]' /tmp/extension-bundle.js > /dev/null
       - name: Stage only the verified VSIX
         run: |
