@@ -306,7 +306,7 @@
         "manimSlidesPreview.independentSections": {
           "type": "boolean",
           "default": false,
-          "description": "EXPERIMENTAL: independently render sections from top-level self.heading(), self.section(), or sequential argument-free self.show_*() calls in construct (each method starts with heading). Cached sections are not rerun; edits to shared helpers invalidate all sections. Cross-section transitions become hard cuts. Unsupported/state-dependent structures fall back."
+          "description": "EXPERIMENTAL: independently render sections from top-level self.heading(), self.section(), or sequential argument-free self.show_*() calls in construct (each method starts with heading). Cached sections are not rerun; edits to shared helpers invalidate all sections, except bodies of private self._helper() methods, which only invalidate the sections that use them. Cross-section transitions become hard cuts. Unsupported/state-dependent structures fall back."
         }
       }
     }

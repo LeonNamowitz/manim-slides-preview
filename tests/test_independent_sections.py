@@ -329,6 +329,60 @@ class IndependentTests(unittest.TestCase):
         self.assertEqual(self._helper_source(changed)["dirty"],
                          initial["scenes"])
 
+    def _private_helper_deck(self):
+        return HELPER_DECK.replace(
+            '        criteria = self.bullet_column(["attendance", "points"])',
+            '        criteria = self._criteria()').replace(
+            '    def show_submissions(self):',
+            '    def _criteria(self):\n'
+            '        return self._rows(["attendance", "points"])\n\n'
+            '    def _rows(self, values):\n'
+            '        return self.bullet_column(values)\n\n'
+            '    def show_submissions(self):')
+
+    def test_private_helper_body_change_is_local_to_users(self):
+        deck = self._private_helper_deck()
+        initial = self._helper_source(deck)
+        self.commit(initial)
+        # Transitive helper (_rows via _criteria) only affects show_criteria.
+        changed = deck.replace("return self.bullet_column(values)",
+                               "return self.bullet_column(values[::-1])")
+        updated = self._helper_source(changed)
+        self.assertEqual(updated["dirty"], [initial["scenes"][1]])
+        ns = {"__name__": "private_helpers"}
+        exec(compile(Path(updated["source"]).read_text(encoding="utf-8"),
+                     updated["source"], "exec"), ns)
+        second = ns[updated["scenes"][1]]()
+        second.construct()
+        self.assertIn("show points", second.events)
+
+    def test_private_helper_signature_change_invalidates_all(self):
+        deck = self._private_helper_deck()
+        initial = self._helper_source(deck)
+        self.commit(initial)
+        changed = deck.replace("def _rows(self, values):",
+                               "def _rows(self, values, extra=None):")
+        self.assertEqual(self._helper_source(changed)["dirty"], initial["scenes"])
+
+    def test_private_helper_referenced_indirectly_stays_shared(self):
+        deck = self._private_helper_deck().replace(
+            '        self.reveal("PDF")', '        self.reveal(str("_rows"))')
+        initial = self._helper_source(deck)
+        self.commit(initial)
+        changed = deck.replace('str("_rows")', 'str("_rows")').replace(
+            "return self.bullet_column(values)",
+            "return self.bullet_column(list(values))")
+        self.assertEqual(self._helper_source(changed)["dirty"], initial["scenes"])
+
+    def test_escaping_self_keeps_helpers_shared(self):
+        deck = self._private_helper_deck().replace(
+            '        self.reveal("PDF")', '        self.reveal(repr(self))')
+        initial = self._helper_source(deck)
+        self.commit(initial)
+        changed = deck.replace("return self.bullet_column(values)",
+                               "return self.bullet_column(list(values))")
+        self.assertEqual(self._helper_source(changed)["dirty"], initial["scenes"])
+
     def test_module_level_value_changes_invalidate_all(self):
         initial = self._helper_source()
         self.commit(initial)

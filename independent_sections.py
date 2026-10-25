@@ -3,7 +3,7 @@
 import ast, hashlib, json, os, re, sys
 from pathlib import Path
 
-VERSION=1
+VERSION=2
 SKIP={".git",".venv","venv","node_modules","__pycache__", ".manim-slides-preview","site-packages","dist","build",".pytest_cache"}
 def sha(x):
     return hashlib.sha256(x.encode("utf-8") if isinstance(x,str) else x).hexdigest()
@@ -161,6 +161,79 @@ def _helper_sections(cls, construct):
     return groups, methods
 
 
+def _private_helpers(cls, module, methods):
+    """Return {name: FunctionDef} for scene-local helpers safe to track per section.
+
+    Conservative: only undecorated, uniquely defined ``_name`` methods of the
+    scene class (not dunders) whose name is referenced nowhere except as
+    ``self._name`` inside the scene class's own section/helper methods.
+    Anything else (string mentions, ``getattr``, other classes, module code,
+    construct) keeps the helper in the shared environment.
+    """
+    section_names = {m.name for m in methods}
+    found = {}
+    for node in cls.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.setdefault(node.name, []).append(node)
+    helpers = {
+        name: defs[0] for name, defs in found.items()
+        if name.startswith("_") and not name.startswith("__")
+        and name not in section_names and len(defs) == 1
+        and isinstance(defs[0], ast.FunctionDef) and not defs[0].decorator_list
+    }
+    if not helpers:
+        return {}
+    tracked = set(section_names) | set(helpers)
+    tracked_ids = {id(n) for n in cls.body
+                   if isinstance(n, ast.FunctionDef) and n.name in tracked}
+    allowed = set()  # ids of self._name attribute nodes inside tracked bodies
+    for node in cls.body:
+        if id(node) in tracked_ids:
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Attribute) and isinstance(sub.ctx, ast.Load)
+                        and isinstance(sub.value, ast.Name) and sub.value.id == "self"):
+                    allowed.add(id(sub))
+    for sub in ast.walk(module):
+        if isinstance(sub, ast.Name) and sub.id in {"getattr", "setattr", "vars", "__dict__"}:
+            return {}
+        if isinstance(sub, ast.Attribute) and sub.attr == "__dict__":
+            return {}
+        if isinstance(sub, ast.Attribute) and sub.attr in helpers and id(sub) not in allowed:
+            helpers.pop(sub.attr)
+        elif isinstance(sub, ast.Name) and sub.id in helpers:
+            helpers.pop(sub.id)
+        elif (isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+              and sub.value in helpers):
+            helpers.pop(sub.value)
+    return helpers
+
+
+def _self_refs(func):
+    """Names used as self.<name>; None when self escapes (passed or aliased)."""
+    refs, attr_values = set(), set()
+    for sub in ast.walk(func):
+        if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name)                 and sub.value.id == "self":
+            refs.add(sub.attr)
+            attr_values.add(id(sub.value))
+    for sub in ast.walk(func):
+        if isinstance(sub, ast.Name) and sub.id == "self" and id(sub) not in attr_values:
+            return None
+    return refs
+
+
+def _helper_closure(method, helpers):
+    """Helpers transitively reachable from method, or None when unknowable."""
+    seen, todo = set(), [method]
+    while todo:
+        refs = _self_refs(todo.pop())
+        if refs is None:
+            return None
+        for name in sorted(refs & set(helpers) - seen):
+            seen.add(name)
+            todo.append(helpers[name])
+    return seen
+
+
 def _inline_sections(construct):
     groups = []
     for node in construct.body:
@@ -216,8 +289,16 @@ def partition_details(code, scene):
     if helper is not None:
         groups, methods = helper
         mode = "helper-methods"
+        helpers = _private_helpers(cls, module, methods)
+        closures = [_helper_closure(method, helpers) for method in methods]
+        if any(c is None for c in closures):
+            helpers = {}  # self escapes somewhere: keep every helper shared.
+            closures = [set() for _ in methods]
         fingerprints = [
-            ast.dump(method, include_attributes=False) for method in methods
+            ast.dump(method, include_attributes=False) + "".join(
+                "|" + name + "|" + ast.dump(helpers[name], include_attributes=False)
+                for name in sorted(closure))
+            for method, closure in zip(methods, closures)
         ]
     else:
         groups = _inline_sections(construct)
@@ -229,6 +310,10 @@ def partition_details(code, scene):
             for group in groups
         ]
     original_body = construct.body
+    if mode == "helper-methods":
+        # Section-local helper bodies are hashed in their sections' fingerprints;
+        # their signatures stay in the shared environment.
+        methods = methods + [helpers[name] for name in sorted(helpers)]
     own_bodies = [method.body for method in methods]
     try:
         construct.body = [ast.Pass()]
