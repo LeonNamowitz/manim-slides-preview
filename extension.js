@@ -339,6 +339,40 @@ def _reader():
     _requests.put(None)  # EOF
 threading.Thread(target=_reader, daemon=True).start()
 
+import importlib as _importlib, sysconfig as _sysconfig
+
+def _library_roots():
+    roots = set()
+    for key in ("stdlib", "platstdlib", "purelib", "platlib"):
+        path = _sysconfig.get_paths().get(key)
+        if path:
+            roots.add(os.path.normcase(os.path.realpath(path)))
+    for path in (sys.prefix, sys.base_prefix):
+        roots.add(os.path.normcase(os.path.realpath(path)))
+    return roots
+
+_LIB_ROOTS = _library_roots()
+
+def _purge_user_modules():
+    # The warm daemon keeps imported modules, but Manim only re-executes the scene
+    # file. Edits to modules next to it (e.g. slide_utils, even when pip-installed
+    # editable) would otherwise render with STALE code: same animation hashes, so
+    # cache hits, so an unchanged preview. Drop everything that lives outside the
+    # Python installation / virtualenv so the next render imports it fresh.
+    dropped = []
+    for name, mod in list(sys.modules.items()):
+        path = getattr(mod, "__file__", None)
+        if not path or name in ("__main__", "__mp_main__") or name.split(".")[0] in ("manim", "manim_slides"):
+            continue
+        real = os.path.normcase(os.path.realpath(path))
+        if any(real == root or real.startswith(root + os.sep) for root in _LIB_ROOTS):
+            continue
+        del sys.modules[name]
+        dropped.append(name)
+    if dropped:
+        _importlib.invalidate_caches()
+    return dropped
+
 def run(args, in_process_render):
     try:
         if in_process_render and _manim_render is not None and args and args[0] == "render":
@@ -378,6 +412,9 @@ while True:
     _SLIDE_CACHE.begin(req)
     if "_cached_code_source" in globals():
         _cached_code_source.cache_clear()  # fresh request: changed source files
+    _dropped = _purge_user_modules()
+    if _dropped:
+        print("[msp-modules] reimporting " + ", ".join(sorted(_dropped)[:8]) + (" ..." if len(_dropped) > 8 else ""), flush=True)
     t = time.time()
     if faulthandler:
         try: faulthandler.dump_traceback_later(300, repeat=True, exit=False)

@@ -7,7 +7,10 @@ cannot (in particular, counter initialization with profiling disabled).
 import ast
 import contextlib
 import io
+import os
 import sys
+import tempfile
+import types
 import unittest
 from functools import lru_cache
 from pathlib import Path
@@ -109,6 +112,55 @@ class CacheFastTest(unittest.TestCase):
         self.assertEqual(self.ns["_measure_play"](self.renderer), "played")
         self.assertFalse(self.scene._msp_cached_fades)
         self.assertEqual(self.scene.original_begin_calls, 1)
+
+
+class PurgeUserModulesTest(unittest.TestCase):
+    """The warm daemon must not render with stale helper modules (e.g. slide_utils)."""
+
+    def setUp(self):
+        wanted_defs = {"_library_roots", "_purge_user_modules"}
+        body = []
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in wanted_defs:
+                body.append(node)
+            elif isinstance(node, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == "_LIB_ROOTS" for t in node.targets):
+                body.append(node)
+            elif isinstance(node, ast.Import) and any(
+                    a.asname in {"_importlib", "_sysconfig"} for a in node.names):
+                body.append(node)
+        self.assertEqual(len(body), 4, "purge helpers missing from the daemon script")
+        self.ns = {"os": os, "sys": sys}
+        exec(compile(ast.Module(body=body, type_ignores=[]), str(DAEMON), "exec"), self.ns)
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        sys.path.insert(0, self.folder.name)
+        self.addCleanup(sys.path.remove, self.folder.name)
+        self.addCleanup(sys.modules.pop, "msp_helper_mod", None)
+        self.module = Path(self.folder.name) / "msp_helper_mod.py"
+
+    def test_edited_helper_module_is_reimported(self):
+        self.module.write_text("VALUE = 1", encoding="utf-8")
+        import msp_helper_mod
+        self.assertEqual(msp_helper_mod.VALUE, 1)
+        self.module.write_text("VALUE = 22", encoding="utf-8")
+        self.assertIn("msp_helper_mod", self.ns["_purge_user_modules"]())
+        import msp_helper_mod as fresh
+        self.assertEqual(fresh.VALUE, 22)
+
+    def test_library_and_entry_modules_are_kept(self):
+        import json
+        before = {"json", "os", "unittest", "__main__"} & set(sys.modules)
+        dropped = set(self.ns["_purge_user_modules"]())
+        self.assertFalse(before & dropped)
+        self.assertIs(sys.modules["json"], json)
+
+    def test_manim_packages_are_never_purged(self):
+        fake = types.ModuleType("manim_slides.msp_fake")
+        fake.__file__ = str(self.module)
+        sys.modules["manim_slides.msp_fake"] = fake
+        self.addCleanup(sys.modules.pop, "manim_slides.msp_fake", None)
+        self.assertNotIn("manim_slides.msp_fake", self.ns["_purge_user_modules"]())
 
 
 if __name__ == "__main__":
